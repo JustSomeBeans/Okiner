@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 import traceback
 from discord.ext import commands
+import sqlite3
 
 RP_FILE = "rp_data.json"  # TODO: make this configurable.
 DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories and make dynamic eventually.
@@ -95,12 +96,12 @@ requested_permissions = discord.Permissions(
 )
 
 
-class OkinerBot(discord.Client):
+class OkinerBot(commands.Bot):
     def __init__(self) -> None:
-        super().__init__(intents=intents, application_id=int(APPLICATION_ID) if APPLICATION_ID else None)
+        super().__init__(intents=intents, command_prefix="oki!" application_id=int(APPLICATION_ID) if APPLICATION_ID else None)
 
         # The command tree stores slash commands and handles sync with Discord.
-        self.tree = app_commands.CommandTree(self)
+        # ~~self.tree = app_commands.CommandTree(self)~~ No need to do this when subclassing commands.Bot
 
     async def setup_hook(self) -> None:
         # Sync slash commands during startup so Discord sees the latest command definitions.
