@@ -98,7 +98,7 @@ requested_permissions = discord.Permissions(
 
 class OkinerBot(commands.Bot):
     def __init__(self) -> None:
-        super().__init__(intents=intents, command_prefix="oki!" application_id=int(APPLICATION_ID) if APPLICATION_ID else None)
+        super().__init__(intents=intents, command_prefix="oki!", application_id=int(APPLICATION_ID) if APPLICATION_ID else None)
 
         # The command tree stores slash commands and handles sync with Discord.
         # ~~self.tree = app_commands.CommandTree(self)~~ No need to do this when subclassing commands.Bot
