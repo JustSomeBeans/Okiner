@@ -10,6 +10,9 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
+import traceback
+from discord.ext import commands
+
 RP_FILE = "rp_data.json"  # TODO: make this configurable.
 DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories and make dynamic eventually.
 
@@ -265,7 +268,18 @@ async def remove_text(interaction: discord.Interaction, rp_type: str, text: str)
     save_rp_data(data)
     await interaction.response.send_message(f"Removed text from `{rp_type}`.", ephemeral=True)
 
+# ------ EVENTS --------
+#Error handling for the bot, very minimal currently
+#TODO: Identify future errors that will be produced by commands and handle them on a case-by-case basis, and add the corresponding code here
+@bot.event
+async def on_command_error(ctx: commands.Context, err) -> None:
+    traceback_text = "".join(
+        traceback.format_exception(type(err), err, err.__traceback__)
+    )
+    traceback_embed = discord.Embed(description=traceback_text, title=type(err))
+    await ctx.reply(embed=traceback_embed)
 
+# ----- MAIN EVENT LOOP -----
 def main() -> None:
     """Start the Discord client and block until the bot shuts down."""
     bot.run(TOKEN)
