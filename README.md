@@ -1,8 +1,8 @@
 # Okiner
 
-Okiner is a Python-based Discord bot project intended for server member interaction, community engagement, and roleplay-focused features.
+Okiner is a Python based Discord bot project intended for server member interaction, community engagement, and roleplay-focused features.
 
-The repository is currently set up with the core structure needed to start development, including dependency management, environment configuration, and a minimal bot entrypoint.
+The repository is currently set up with the structure needed to start development, including dependency management, environment configuration, and a minimal bot entrypoint.
 
 ## Discord Application Configuration
 

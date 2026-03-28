@@ -1,5 +1,10 @@
+# Virtual Environment
 .venv/
+
+#Python cache files
 __pycache__/
 *.py[cod]
-.env
 
+# Environment vars. Keep secrets out of repo. 
+.env*
+!.env.example
