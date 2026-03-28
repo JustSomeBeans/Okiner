@@ -1,44 +1,82 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
+from typing import Any
 from urllib.parse import urlencode
 
-from discord import app_commands
 import discord
+from discord import app_commands
 from dotenv import load_dotenv
 
-# Load values from a local `.env` file into the process environment so we
-# can keep secrets like the bot token out of source control.
+RP_FILE = "rp_data.json"  # TODO: make this configurable.
+DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories and make dynamic eventually.
+
+
+def load_rp_data() -> dict[str, Any]:
+    """Load RP data from disk, creating a minimal file if it does not exist yet."""
+    if not os.path.exists(RP_FILE):
+        data: dict[str, Any] = {"servers": {}}
+        save_rp_data(data)
+        return data
+
+    with open(RP_FILE, "r", encoding="utf-8") as file_handle:
+        data = json.load(file_handle)
+
+    if "servers" not in data or not isinstance(data["servers"], dict):
+        data["servers"] = {}
+
+    return data
+
+
+def save_rp_data(data: dict[str, Any]) -> None:
+    """Persist the RP data file to disk in a readable format."""
+    with open(RP_FILE, "w", encoding="utf-8") as file_handle:
+        json.dump(data, file_handle, indent=4)
+
+
+def ensure_server_entry(data: dict[str, Any], guild_id: int) -> str:
+    """Ensure the current guild has the expected default RP structure."""
+    guild_id_str = str(guild_id)
+
+    if guild_id_str not in data["servers"]:
+        data["servers"][guild_id_str] = {
+            rp_type: {"images": [], "texts": []} for rp_type in DEFAULT_RP_TYPES
+        }
+
+    return guild_id_str
+
+
+def require_guild(interaction: discord.Interaction) -> discord.Guild | None:
+    """Return the guild for guild-only commands, or `None` when used in DMs."""
+    if interaction.guild is None:
+        return None
+    return interaction.guild
+
+
+# Load local environment variables from `.env` so secrets stay out of source control.
 load_dotenv()
 
-# Configure simple console logging so startup events and errors are easy to see
-# while developing locally or running the bot on a server.
+# Keep logging simple and readable during development and deployment.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
-# Read configuration from environment variables.
-# `DISCORD_APPLICATION_ID` is optional for startup, but useful for building
-# a correct invite URL and matching the bot to its Discord application.
 TOKEN = os.getenv("DISCORD_TOKEN")
 APPLICATION_ID = os.getenv("DISCORD_APPLICATION_ID")
 
-# Stop immediately with a clear message if the required token is missing.
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Copy .env.example to .env and add your bot token.")
 
-# Intents tell Discord which categories of events this bot wants to receive.
-# This project needs presence updates, member events, and message content,
-# so those privileged intents are explicitly enabled here.
+# These are the gateway intents the bot currently expects to use.
 intents = discord.Intents.default()
 intents.presences = True
 intents.members = True
 intents.message_content = True
 
-# These permissions mirror the intended bot capability set as closely as the
-# Discord API allows when generating an OAuth invite URL.
+# These permissions are used when generating the bot invite URL.
 requested_permissions = discord.Permissions(
     add_reactions=True,
     attach_files=True,
@@ -56,33 +94,24 @@ requested_permissions = discord.Permissions(
 
 class OkinerBot(discord.Client):
     def __init__(self) -> None:
-        # `application_id` ties this client to the Discord application and is
-        # especially useful when working with slash commands.
         super().__init__(intents=intents, application_id=int(APPLICATION_ID) if APPLICATION_ID else None)
 
-        # `CommandTree` is the slash-command registry for discord.py.
-        # We attach it to the client so commands can be declared below.
+        # The command tree stores slash commands and handles sync with Discord.
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self) -> None:
-        # This runs before `on_ready` and is the preferred place to sync
-        # application commands with Discord.
+        # Sync slash commands during startup so Discord sees the latest command definitions.
         await self.tree.sync()
 
     async def on_ready(self) -> None:
-        # `on_ready` fires when the bot has connected successfully and finished
-        # preparing its internal cache.
         logging.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "unknown")
 
-        # Log an invite URL for convenience during setup if the application ID
-        # has been provided in `.env`.
         if APPLICATION_ID:
             logging.info("Bot invite URL: %s", build_invite_url(APPLICATION_ID))
 
 
 def build_invite_url(application_id: str) -> str:
-    # Discord expects the scopes and permissions to be passed as query
-    # parameters on the OAuth authorize URL.
+    """Build the OAuth URL used to invite the bot with the current scopes and permissions."""
     query = urlencode(
         {
             "client_id": application_id,
@@ -93,23 +122,154 @@ def build_invite_url(application_id: str) -> str:
     return f"https://discord.com/oauth2/authorize?{query}"
 
 
-# Create one bot instance for the whole application.
+async def rp_type_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Suggest RP types for the current guild, falling back to defaults when needed."""
+    if interaction.guild is None:
+        keys = DEFAULT_RP_TYPES
+    else:
+        data = load_rp_data()
+        guild_id = ensure_server_entry(data, interaction.guild.id)
+        save_rp_data(data)
+        keys = list(data["servers"][guild_id].keys())
+
+    return [
+        app_commands.Choice(name=key, value=key)
+        for key in keys
+        if current.lower() in key.lower()
+    ][:25]
+
+
 bot = OkinerBot()
 
 
 @bot.tree.command(name="ping", description="Check whether the bot is responding.")
 async def ping(interaction: discord.Interaction) -> None:
-    # Slash commands receive an interaction instead of a message object.
-    # We reply directly to that interaction with a simple test response.
+    """Small health-check command used to confirm the bot is online."""
     await interaction.response.send_message("Pong!")
 
 
+@bot.tree.command(name="rp", description="Perform an interaction between users.")
+@app_commands.describe(rp_type="Which interaction to perform", target="Who to target")
+@app_commands.autocomplete(rp_type=rp_type_autocomplete)
+async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Member) -> None:
+    """
+    Placeholder for the main RP command.
+
+    The command is registered so the surrounding data and autocomplete flow can be
+    developed safely, but the actual RP embed/content logic is intentionally left
+    unfinished for a later pass.
+    """
+    await interaction.response.send_message(
+        f"The `/rp` command for `{rp_type}` targeting {target.mention} is not implemented yet.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="addimage", description="Add an image URL to an RP type.")
+@app_commands.autocomplete(rp_type=rp_type_autocomplete)
+async def add_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
+    """Store a new image URL for a guild-specific RP type."""
+    guild = require_guild(interaction)
+    if guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    data = load_rp_data()
+    guild_id = ensure_server_entry(data, guild.id)
+    rp_entry = data["servers"][guild_id].get(rp_type)
+
+    if not rp_entry:
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    rp_entry["images"].append(url)
+    save_rp_data(data)
+    await interaction.response.send_message(f"Added image to `{rp_type}`.", ephemeral=True)
+
+
+@bot.tree.command(name="removeimage", description="Remove an image URL from an RP type.")
+@app_commands.autocomplete(rp_type=rp_type_autocomplete)
+async def remove_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
+    """Remove an existing image URL from a guild-specific RP type."""
+    guild = require_guild(interaction)
+    if guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    data = load_rp_data()
+    guild_id = ensure_server_entry(data, guild.id)
+    rp_entry = data["servers"][guild_id].get(rp_type)
+
+    if not rp_entry:
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    try:
+        rp_entry["images"].remove(url)
+    except ValueError:
+        await interaction.response.send_message("That image URL was not found for this RP type.", ephemeral=True)
+        return
+
+    save_rp_data(data)
+    await interaction.response.send_message(f"Removed image from `{rp_type}`.", ephemeral=True)
+
+
+@bot.tree.command(name="addtext", description="Add a text template to an RP type.")
+@app_commands.autocomplete(rp_type=rp_type_autocomplete)
+async def add_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
+    """Store a new text template for a guild-specific RP type."""
+    guild = require_guild(interaction)
+    if guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    data = load_rp_data()
+    guild_id = ensure_server_entry(data, guild.id)
+    rp_entry = data["servers"][guild_id].get(rp_type)
+
+    if not rp_entry:
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    rp_entry["texts"].append(text)
+    save_rp_data(data)
+    await interaction.response.send_message(f"Added text to `{rp_type}`.", ephemeral=True)
+
+
+@bot.tree.command(name="removetext", description="Remove a text template from an RP type.")
+@app_commands.autocomplete(rp_type=rp_type_autocomplete)
+async def remove_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
+    """Remove an existing text template from a guild-specific RP type."""
+    guild = require_guild(interaction)
+    if guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    data = load_rp_data()
+    guild_id = ensure_server_entry(data, guild.id)
+    rp_entry = data["servers"][guild_id].get(rp_type)
+
+    if not rp_entry:
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    try:
+        rp_entry["texts"].remove(text)
+    except ValueError:
+        await interaction.response.send_message("That text entry was not found for this RP type.", ephemeral=True)
+        return
+
+    save_rp_data(data)
+    await interaction.response.send_message(f"Removed text from `{rp_type}`.", ephemeral=True)
+
+
 def main() -> None:
-    # Start the Discord connection loop. This call blocks until the bot stops.
+    """Start the Discord client and block until the bot shuts down."""
     bot.run(TOKEN)
 
 
 if __name__ == "__main__":
-    # This guard allows the file to be imported elsewhere later without
-    # automatically starting the bot.
     main()
