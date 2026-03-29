@@ -21,7 +21,9 @@ DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories an
 async def async_execute_query(query: str, params: tuple = ()) -> None:
     """Helper function to execute any db query, and commits them asynchronously."""
     async with bot.db_pool.acquire() as conn:
+        # await conn.execute(query, params) # Old code executed write queries without committing them, which can leave pooled DB changes unapplied.
         await conn.execute(query, params)
+        await conn.commit()
 
 async def load_rp_data() -> dict[str, Any]:
     """Load RP data from disk, creating a minimal file if it does not exist yet."""
@@ -168,7 +170,8 @@ async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Mem
 async def add_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Store a new image URL for a guild-specific RP type."""
     async with bot.db_pool.acquire() as conn:
-        result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type))
+        # result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type)) # Old code passed a string instead of a one-item tuple and checked type existence globally across guilds.
+        result = await conn.execute("SELECT * FROM roleplay WHERE guild_id = ? AND type = ?", (interaction.guild_id, rp_type))
         rp_entry = await result.fetchall()
 
         if not rp_entry:
@@ -185,19 +188,30 @@ async def add_image(interaction: discord.Interaction, rp_type: str, url: str) ->
 async def remove_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Remove an existing image URL from a guild-specific RP type."""
     async with bot.db_pool.acquire() as conn:
-        result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type))
+        # result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type)) # Old code passed a string instead of a one-item tuple and only checked type existence, so a remove could claim success without a matching DB row for this guild/user/type.
+        result = await conn.execute(
+            "SELECT * FROM roleplay WHERE guild_id = ? AND user_id = ? AND type = ? AND url = ?",
+            (interaction.guild_id, interaction.user.id, rp_type, url),
+        )
         rp_entry = await result.fetchall()
 
         if not rp_entry:
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            await interaction.response.send_message("That image URL was not found for this RP type.", ephemeral=True)
             return
     
+    # await async_execute_query( # Old code did not filter the update by rp_type, so the same URL stored under another RP type for this guild/user could also be cleared.
+    # """
+    # UPDATE roleplay
+    # SET url = NULL
+    # WHERE guild_id = ? AND user_id = ? AND url = ?;
+    # """, (interaction.guild_id, interaction.user.id, url)
+    # )
     await async_execute_query(
     """
     UPDATE roleplay
     SET url = NULL
-    WHERE guild_id = ? AND user_id = ? AND url = ?;
-    """, (interaction.guild_id, interaction.user.id, url)
+    WHERE guild_id = ? AND user_id = ? AND type = ? AND url = ?;
+    """, (interaction.guild_id, interaction.user.id, rp_type, url)
     )
     await interaction.response.send_message(f"Removed image from `{rp_type}`.", ephemeral=True)
 
@@ -208,7 +222,8 @@ async def remove_image(interaction: discord.Interaction, rp_type: str, url: str)
 async def add_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
     """Store a new text template for a guild-specific RP type."""
     async with bot.db_pool.acquire() as conn:
-        result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type))
+        # result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type)) # Old code passed a string instead of a one-item tuple and checked type existence globally across guilds.
+        result = await conn.execute("SELECT * FROM roleplay WHERE guild_id = ? AND type = ?", (interaction.guild_id, rp_type))
         rp_entry = await result.fetchall()
 
         if not rp_entry:
@@ -224,19 +239,30 @@ async def add_text(interaction: discord.Interaction, rp_type: str, text: str) ->
 async def remove_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
     """Remove an existing text template from a guild-specific RP type."""
     async with bot.db_pool.acquire() as conn:
-        result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type))
+        # result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type)) # Old code passed a string instead of a one-item tuple and only checked type existence, so a remove could claim success without a matching DB row for this guild/user/type.
+        result = await conn.execute(
+            "SELECT * FROM roleplay WHERE guild_id = ? AND user_id = ? AND type = ? AND texts = ?",
+            (interaction.guild_id, interaction.user.id, rp_type, text),
+        )
         rp_entry = await result.fetchall()
 
         if not rp_entry:
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            await interaction.response.send_message("That text entry was not found for this RP type.", ephemeral=True)
             return
     
+    # await async_execute_query( # Old code did not filter the update by rp_type, so the same text stored under another RP type for this guild/user could also be cleared.
+    # """
+    # UPDATE roleplay
+    # SET texts = NULL
+    # WHERE guild_id = ? AND user_id = ? AND texts = ?;
+    # """, (interaction.guild_id, interaction.user.id, text)
+    # )
     await async_execute_query(
     """
     UPDATE roleplay
     SET texts = NULL
-    WHERE guild_id = ? AND user_id = ? AND texts = ?;
-    """, (interaction.guild_id, interaction.user.id, text)
+    WHERE guild_id = ? AND user_id = ? AND type = ? AND texts = ?;
+    """, (interaction.guild_id, interaction.user.id, rp_type, text)
     )
     await interaction.response.send_message(f"Removed text from `{rp_type}`.", ephemeral=True)
 
@@ -250,6 +276,32 @@ async def on_command_error(ctx: commands.Context, err) -> None:
     )
     traceback_embed = discord.Embed(description=traceback_text, title=type(err))
     await ctx.reply(embed=traceback_embed)
+
+# Slash/app command error handling
+# Mirrors the classic command handler so we can see all errors in the same style, but also accounts for the differences in how responses work in the app command context.
+# TODO: Could eventually unify logging and maybe add more verbose error messages instead of common traceback dumps, but this is a good start for now.
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction, err: app_commands.AppCommandError
+) -> None:
+    orig = getattr(err, "original", err)
+
+    formatted = traceback.format_exception(type(orig), orig, orig.__traceback__)
+    traceback_text = "".join(formatted)[:4096]
+
+    embed = discord.Embed(
+        title=type(orig).__name__,
+        description=f"```py\n{traceback_text}\n```",
+    )
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+    except Exception:
+        logging.exception("Failed to send app command error reply")
+        # Should be rare. Could happen if the interaction times out or permissions are missing.
 
 # ----- SYNCING COMMANDS -----
 
