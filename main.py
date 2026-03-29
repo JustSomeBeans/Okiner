@@ -12,45 +12,36 @@ from dotenv import load_dotenv
 
 import traceback
 from discord.ext import commands
-import sqlite3
+import asqlite
 import typing
 
 RP_FILE = "rp_data.json"  # TODO: make this configurable.
 DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories and make dynamic eventually.
 
+async def async_execute_query(query: str, params: tuple = ()) -> None:
+    """Helper function to execute any db query, and commits them asynchronously."""
+    async with bot.db_pool.acquire() as conn:
+        await conn.execute(query, params)
 
-def load_rp_data() -> dict[str, Any]:
+async def load_rp_data() -> dict[str, Any]:
     """Load RP data from disk, creating a minimal file if it does not exist yet."""
-    if not os.path.exists(RP_FILE):
-        data: dict[str, Any] = {"servers": {}}
-        save_rp_data(data)
-        return data
+    # if not os.path.exists(RP_FILE):
+    #     data: dict[str, Any] = {"servers": {}}
+    #     save_rp_data(data)
+    #     return data
 
-    with open(RP_FILE, "r", encoding="utf-8") as file_handle:
-        data = json.load(file_handle)
+    # with open(RP_FILE, "r", encoding="utf-8") as file_handle:
+    #     data = json.load(file_handle)
 
-    if "servers" not in data or not isinstance(data["servers"], dict):
-        data["servers"] = {}
+    # if "servers" not in data or not isinstance(data["servers"], dict):
+    #     data["servers"] = {}
 
-    return data
-
-
-def save_rp_data(data: dict[str, Any]) -> None:
-    """Persist the RP data file to disk in a readable format."""
-    with open(RP_FILE, "w", encoding="utf-8") as file_handle:
-        json.dump(data, file_handle, indent=4)
+    return None
 
 
-def ensure_server_entry(data: dict[str, Any], guild_id: int) -> str:
-    """Ensure the current guild has the expected default RP structure."""
-    guild_id_str = str(guild_id)
-
-    if guild_id_str not in data["servers"]:
-        data["servers"][guild_id_str] = {
-            rp_type: {"images": [], "texts": []} for rp_type in DEFAULT_RP_TYPES
-        }
-
-    return guild_id_str
+async def save_rp_data(user_id: int, guild_id: int, types: str, texts: str = None, url: str = None) -> None:
+    """Saves RP data into the rp.db database file."""
+    await async_execute_query("INSERT INTO roleplay (user_id, guild_id, url, texts, type) VALUES (?, ?, ?, ?, ?)", (user_id, guild_id, url, texts, types))
 
 # Load local environment variables from `.env` so secrets stay out of source control.
 load_dotenv()
@@ -96,7 +87,14 @@ class OkinerBot(commands.Bot):
         # The command tree stores slash commands and handles sync with Discord.
         # ~~self.tree = app_commands.CommandTree(self)~~ No need to do this when subclassing commands.Bot
 
-    # Syncing every startup is not ideal because of ratelimits! Added a prefix-based command to sync instead.
+    # DB Pool initialization
+    async def setup_hook(self):
+        self.db_pool = await asqlite.create_pool("rp.db")
+
+    async def close(self):
+        if self.db_pool:
+            await self.db_pool.close()
+        await super().close()
 
     async def on_ready(self) -> None:
         logging.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "unknown")
@@ -121,19 +119,20 @@ async def rp_type_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:
-    """Suggest RP types for the current guild, falling back to defaults when needed."""
-    if interaction.guild is None:
-        keys = DEFAULT_RP_TYPES
-    else:
-        data = load_rp_data()
-        guild_id = ensure_server_entry(data, interaction.guild.id)
-        save_rp_data(data)
-        keys = list(data["servers"][guild_id].keys())
+    """Suggest RP types for the current guild."""
+    async with bot.db_pool.acquire() as conn:
+        result = await conn.execute(
+        """
+        SELECT DISTINCT type
+        FROM roleplay
+        WHERE guild_id = ? AND type LIKE ?
+        """, (interaction.guild_id, f"%{current}%")
+        )
+        keys = await result.fetchall()
 
     return [
-        app_commands.Choice(name=key, value=key)
+        app_commands.Choice(name=key[0], value=key[0])
         for key in keys
-        if current.lower() in key.lower()
     ][:25]
 
 
@@ -168,16 +167,15 @@ async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Mem
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Store a new image URL for a guild-specific RP type."""
-    data = load_rp_data()
-    guild_id = ensure_server_entry(data, interaction.guild_id)
-    rp_entry = data["servers"][guild_id].get(rp_type)
+    async with bot.db_pool.acquire() as conn:
+        result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type))
+        rp_entry = await result.fetchall()
 
-    if not rp_entry:
-        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-        return
+        if not rp_entry:
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
 
-    rp_entry["images"].append(url)
-    save_rp_data(data)
+    await save_rp_data(interaction.user.id, interaction.guild_id, rp_type, url=url)
     await interaction.response.send_message(f"Added image to `{rp_type}`.", ephemeral=True)
 
 
@@ -186,21 +184,21 @@ async def add_image(interaction: discord.Interaction, rp_type: str, url: str) ->
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Remove an existing image URL from a guild-specific RP type."""
-    data = load_rp_data()
-    guild_id = ensure_server_entry(data, interaction.guild_id)
-    rp_entry = data["servers"][guild_id].get(rp_type)
+    async with bot.db_pool.acquire() as conn:
+        result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type))
+        rp_entry = await result.fetchall()
 
-    if not rp_entry:
-        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-        return
-
-    try:
-        rp_entry["images"].remove(url)
-    except ValueError:
-        await interaction.response.send_message("That image URL was not found for this RP type.", ephemeral=True)
-        return
-
-    save_rp_data(data)
+        if not rp_entry:
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
+    
+    await async_execute_query(
+    """
+    UPDATE roleplay
+    SET url = NULL
+    WHERE guild_id = ? AND user_id = ? AND url = ?;
+    """, (interaction.guild_id, interaction.user.id, url)
+    )
     await interaction.response.send_message(f"Removed image from `{rp_type}`.", ephemeral=True)
 
 
@@ -209,16 +207,15 @@ async def remove_image(interaction: discord.Interaction, rp_type: str, url: str)
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
     """Store a new text template for a guild-specific RP type."""
-    data = load_rp_data()
-    guild_id = ensure_server_entry(data, interaction.guild_id)
-    rp_entry = data["servers"][guild_id].get(rp_type)
+    async with bot.db_pool.acquire() as conn:
+        result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type))
+        rp_entry = await result.fetchall()
 
-    if not rp_entry:
-        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-        return
+        if not rp_entry:
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
 
-    rp_entry["texts"].append(text)
-    save_rp_data(data)
+    await save_rp_data(interaction.user.id, interaction.guild_id, rp_type, text)
     await interaction.response.send_message(f"Added text to `{rp_type}`.", ephemeral=True)
 
 @bot.tree.command(name="removetext", description="Remove a text template from an RP type.")
@@ -226,21 +223,21 @@ async def add_text(interaction: discord.Interaction, rp_type: str, text: str) ->
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
     """Remove an existing text template from a guild-specific RP type."""
-    data = load_rp_data()
-    guild_id = ensure_server_entry(data, interaction.guild_id)
-    rp_entry = data["servers"][guild_id].get(rp_type)
+    async with bot.db_pool.acquire() as conn:
+        result = await conn.execute("SELECT * FROM roleplay WHERE type = ?", (rp_type))
+        rp_entry = await result.fetchall()
 
-    if not rp_entry:
-        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-        return
-
-    try:
-        rp_entry["texts"].remove(text)
-    except ValueError:
-        await interaction.response.send_message("That text entry was not found for this RP type.", ephemeral=True)
-        return
-
-    save_rp_data(data)
+        if not rp_entry:
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
+    
+    await async_execute_query(
+    """
+    UPDATE roleplay
+    SET texts = NULL
+    WHERE guild_id = ? AND user_id = ? AND texts = ?;
+    """, (interaction.guild_id, interaction.user.id, text)
+    )
     await interaction.response.send_message(f"Removed text from `{rp_type}`.", ephemeral=True)
 
 # ------ EVENTS --------

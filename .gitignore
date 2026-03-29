@@ -8,3 +8,9 @@ __pycache__/
 # Environment vars. Keep secrets out of repo. 
 .env*
 !.env.example
+
+# Database files
+*.db
+*.sqlite3-query
+*.db-shm
+*.db-wal
