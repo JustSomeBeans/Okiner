@@ -21,7 +21,6 @@ DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories an
 async def async_execute_query(query: str, params: tuple = ()) -> None:
     """Helper function to execute any db query, and commits them asynchronously."""
     async with bot.db_pool.acquire() as conn:
-        # await conn.execute(query, params) # Old code executed write queries without committing them, which can leave pooled DB changes unapplied.
         await conn.execute(query, params)
         await conn.commit()
 
@@ -199,13 +198,6 @@ async def remove_image(interaction: discord.Interaction, rp_type: str, url: str)
             await interaction.response.send_message("That image URL was not found for this RP type.", ephemeral=True)
             return
     
-    # await async_execute_query( # Old code did not filter the update by rp_type, so the same URL stored under another RP type for this guild/user could also be cleared.
-    # """
-    # UPDATE roleplay
-    # SET url = NULL
-    # WHERE guild_id = ? AND user_id = ? AND url = ?;
-    # """, (interaction.guild_id, interaction.user.id, url)
-    # )
     await async_execute_query(
     """
     UPDATE roleplay
@@ -249,14 +241,7 @@ async def remove_text(interaction: discord.Interaction, rp_type: str, text: str)
         if not rp_entry:
             await interaction.response.send_message("That text entry was not found for this RP type.", ephemeral=True)
             return
-    
-    # await async_execute_query( # Old code did not filter the update by rp_type, so the same text stored under another RP type for this guild/user could also be cleared.
-    # """
-    # UPDATE roleplay
-    # SET texts = NULL
-    # WHERE guild_id = ? AND user_id = ? AND texts = ?;
-    # """, (interaction.guild_id, interaction.user.id, text)
-    # )
+
     await async_execute_query(
     """
     UPDATE roleplay
