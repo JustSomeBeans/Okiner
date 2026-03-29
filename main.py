@@ -105,6 +105,9 @@ class OkinerBot(commands.Bot):
     async def setup_hook(self):
         self.db_pool = await asqlite.create_pool("rp.db")
 
+        async with self.db_pool.acquire() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+
     async def close(self):
         if self.db_pool:
             await self.db_pool.close()
@@ -140,7 +143,7 @@ async def rp_type_autocomplete(
     pattern = f"%{current}%"
     async with bot.db_pool.acquire() as conn:
         result = await conn.execute(
-            "SELECT type FROM rp_types WHERE guild_id = ? AND type LIKE ? ORDER BY type LIMIT 25",
+            "SELECT type FROM rp_types WHERE guild_id = ? AND LOWER(type) LIKE LOWER(?) ORDER BY type LIMIT 25",
             (interaction.guild_id, pattern),
         )
         rows = await result.fetchall()
@@ -179,6 +182,7 @@ async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Mem
 @app_commands.guild_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
+    rp_type = rp_type.strip().lower()
     """Store a new image URL for a guild-specific RP type."""
     async with bot.db_pool.acquire() as conn:
         result = await conn.execute(
@@ -200,6 +204,7 @@ async def add_image(interaction: discord.Interaction, rp_type: str, url: str) ->
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Remove an existing image URL from a guild-specific RP type using the new schema."""
+    rp_type = rp_type.strip().lower()
     async with bot.db_pool.acquire() as conn:
         # Verify the RP type exists for this guild
         result = await conn.execute(
@@ -233,6 +238,7 @@ async def remove_image(interaction: discord.Interaction, rp_type: str, url: str)
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
     """Store a new text template for a guild-specific RP type using the new schema."""
+    rp_type = rp_type.strip().lower()
     async with bot.db_pool.acquire() as conn:
         result = await conn.execute(
             "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
@@ -252,6 +258,7 @@ async def add_text(interaction: discord.Interaction, rp_type: str, text: str) ->
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
     """Remove an existing text template from a guild-specific RP type using the new schema."""
+    rp_type = rp_type.strip().lower()
     async with bot.db_pool.acquire() as conn:
         # Verify the RP type exists for this guild
         result = await conn.execute(
@@ -282,6 +289,7 @@ async def remove_text(interaction: discord.Interaction, rp_type: str, text: str)
 @bot.tree.command(name="addtype", description="Add a new RP type to the server.")
 @app_commands.guild_only()
 async def add_type(interaction: discord.Interaction, rp_type: str) -> None:
+    """Add a new RP type to the server, which can then have text templates and image URLs added to it using the other commands."""
     rp_type = rp_type.strip().lower()
     if not rp_type:
         await interaction.response.send_message("RP type cannot be empty.", ephemeral=True)
@@ -372,6 +380,7 @@ async def sync(ctx, scope: typing.Optional[str] = "local"):
 def main() -> None:
     """Start the Discord client and block until the bot shuts down."""
     bot.run(TOKEN)
+    
 
 
 if __name__ == "__main__":
