@@ -40,9 +40,22 @@ async def load_rp_data() -> dict[str, Any]:
     return None
 
 
-async def save_rp_data(user_id: int, guild_id: int, types: str, texts: str = None, url: str = None) -> None:
-    """Saves RP data into the rp.db database file."""
-    await async_execute_query("INSERT INTO roleplay (user_id, guild_id, url, texts, type) VALUES (?, ?, ?, ?, ?)", (user_id, guild_id, url, texts, types))
+# async def save_rp_data(user_id: int, guild_id: int, types: str, texts: str = None, url: str = None) -> None:
+#    """Saves RP data into the rp.db database file."""
+#    await async_execute_query("INSERT INTO roleplay (user_id, guild_id, url, texts, type) VALUES (?, ?, ?, ?, ?)", (user_id, guild_id, url, texts, types))
+
+async def add_rp_type(guild_id: int, rp_type: str) -> None:
+    await async_execute_query(
+        "INSERT INTO rp_types (guild_id, type) VALUES (?, ?)",
+        (guild_id, rp_type)
+    )
+
+
+async def add_rp_entry(user_id: int, guild_id: int, rp_type: str, text: str = None, url: str = None) -> None:
+    await async_execute_query(
+        "INSERT INTO roleplay_entries (user_id, guild_id, type, url, texts) VALUES (?, ?, ?, ?, ?)",
+        (user_id, guild_id, rp_type, url, text)
+    )
 
 # Load local environment variables from `.env` so secrets stay out of source control.
 load_dotenv()
@@ -120,21 +133,19 @@ async def rp_type_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:
-    """Suggest RP types for the current guild."""
+    """Suggest RP types for the current guild using the new schema."""
+    if not interaction.guild_id:
+        return []
+
+    pattern = f"%{current}%"
     async with bot.db_pool.acquire() as conn:
         result = await conn.execute(
-        """
-        SELECT DISTINCT type
-        FROM roleplay
-        WHERE guild_id = ? AND type LIKE ?
-        """, (interaction.guild_id, f"%{current}%")
+            "SELECT type FROM rp_types WHERE guild_id = ? AND type LIKE ? ORDER BY type LIMIT 25",
+            (interaction.guild_id, pattern),
         )
-        keys = await result.fetchall()
+        rows = await result.fetchall()
 
-    return [
-        app_commands.Choice(name=key[0], value=key[0])
-        for key in keys
-    ][:25]
+    return [app_commands.Choice(name=row[0], value=row[0]) for row in rows]
 
 
 bot = OkinerBot()
@@ -170,14 +181,17 @@ async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Mem
 async def add_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Store a new image URL for a guild-specific RP type."""
     async with bot.db_pool.acquire() as conn:
-        result = await conn.execute("SELECT * FROM roleplay WHERE guild_id = ? AND type = ?", (interaction.guild_id, rp_type))
-        rp_entry = await result.fetchall()
+        result = await conn.execute(
+            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
+            (interaction.guild_id, rp_type),
+        )
+        exists = await result.fetchone()
 
-        if not rp_entry:
+        if not exists:
             await interaction.response.send_message("Unknown RP type.", ephemeral=True)
             return
 
-    await save_rp_data(interaction.user.id, interaction.guild_id, rp_type, url=url)
+    await add_rp_entry(interaction.user.id, interaction.guild_id, rp_type, url=url)
     await interaction.response.send_message(f"Added image to `{rp_type}`.", ephemeral=True)
 
 
@@ -185,24 +199,31 @@ async def add_image(interaction: discord.Interaction, rp_type: str, url: str) ->
 @app_commands.guild_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
-    """Remove an existing image URL from a guild-specific RP type."""
+    """Remove an existing image URL from a guild-specific RP type using the new schema."""
     async with bot.db_pool.acquire() as conn:
+        # Verify the RP type exists for this guild
         result = await conn.execute(
-            "SELECT * FROM roleplay WHERE guild_id = ? AND user_id = ? AND type = ? AND url = ?",
+            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
+            (interaction.guild_id, rp_type),
+        )
+        exists = await result.fetchone()
+        if not exists:
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
+
+        # Verify the specific image entry exists
+        result = await conn.execute(
+            "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND user_id = ? AND type = ? AND url = ?",
             (interaction.guild_id, interaction.user.id, rp_type, url),
         )
-        rp_entry = await result.fetchall()
-
+        rp_entry = await result.fetchone()
         if not rp_entry:
             await interaction.response.send_message("That image URL was not found for this RP type.", ephemeral=True)
             return
-    
+
     await async_execute_query(
-    """
-    UPDATE roleplay
-    SET url = NULL
-    WHERE guild_id = ? AND user_id = ? AND type = ? AND url = ?;
-    """, (interaction.guild_id, interaction.user.id, rp_type, url)
+        "DELETE FROM roleplay_entries WHERE guild_id = ? AND user_id = ? AND type = ? AND url = ?",
+        (interaction.guild_id, interaction.user.id, rp_type, url),
     )
     await interaction.response.send_message(f"Removed image from `{rp_type}`.", ephemeral=True)
 
@@ -211,63 +232,81 @@ async def remove_image(interaction: discord.Interaction, rp_type: str, url: str)
 @app_commands.guild_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
-    """Store a new text template for a guild-specific RP type."""
+    """Store a new text template for a guild-specific RP type using the new schema."""
     async with bot.db_pool.acquire() as conn:
-        result = await conn.execute("SELECT * FROM roleplay WHERE guild_id = ? AND type = ?", (interaction.guild_id, rp_type))
-        rp_entry = await result.fetchall()
+        result = await conn.execute(
+            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
+            (interaction.guild_id, rp_type),
+        )
+        exists = await result.fetchone()
 
-        if not rp_entry:
+        if not exists:
             await interaction.response.send_message("Unknown RP type.", ephemeral=True)
             return
 
-    await save_rp_data(interaction.user.id, interaction.guild_id, rp_type, text)
+    await add_rp_entry(interaction.user.id, interaction.guild_id, rp_type, text=text)
     await interaction.response.send_message(f"Added text to `{rp_type}`.", ephemeral=True)
 
 @bot.tree.command(name="removetext", description="Remove a text template from an RP type.")
 @app_commands.guild_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
-    """Remove an existing text template from a guild-specific RP type."""
+    """Remove an existing text template from a guild-specific RP type using the new schema."""
     async with bot.db_pool.acquire() as conn:
+        # Verify the RP type exists for this guild
         result = await conn.execute(
-            "SELECT * FROM roleplay WHERE guild_id = ? AND user_id = ? AND type = ? AND texts = ?",
+            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
+            (interaction.guild_id, rp_type),
+        )
+        exists = await result.fetchone()
+        if not exists:
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
+
+        # Verify the specific text entry exists
+        result = await conn.execute(
+            "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND user_id = ? AND type = ? AND texts = ?",
             (interaction.guild_id, interaction.user.id, rp_type, text),
         )
-        rp_entry = await result.fetchall()
-
+        rp_entry = await result.fetchone()
         if not rp_entry:
             await interaction.response.send_message("That text entry was not found for this RP type.", ephemeral=True)
             return
 
     await async_execute_query(
-    """
-    UPDATE roleplay
-    SET texts = NULL
-    WHERE guild_id = ? AND user_id = ? AND type = ? AND texts = ?;
-    """, (interaction.guild_id, interaction.user.id, rp_type, text)
+        "DELETE FROM roleplay_entries WHERE guild_id = ? AND user_id = ? AND type = ? AND texts = ?",
+        (interaction.guild_id, interaction.user.id, rp_type, text),
     )
     await interaction.response.send_message(f"Removed text from `{rp_type}`.", ephemeral=True)
 
 @bot.tree.command(name="addtype", description="Add a new RP type to the server.")
 @app_commands.guild_only()
 async def add_type(interaction: discord.Interaction, rp_type: str) -> None:
-    """Add a new type of RP interaction that users can perform in this guild."""
-    rp_type = rp_type.strip().lower() # Normalize type names by stripping whitespace and lowercasing. This is optional but can help reduce duplicates and confusion.
-
+    rp_type = rp_type.strip().lower()
     if not rp_type:
         await interaction.response.send_message("RP type cannot be empty.", ephemeral=True)
         return
-    
-    if len(rp_type) > 64: # Arbitrary max length to prevent abuse and ensure display compatibility. This can be adjusted as needed.
+    if len(rp_type) > 64:
         await interaction.response.send_message("RP type too long.", ephemeral=True)
         return
-    
+
+    async with bot.db_pool.acquire() as conn:
+        result = await conn.execute(
+            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
+            (interaction.guild_id, rp_type),
+        )
+        exists = await result.fetchone()
+        if exists:
+            await interaction.response.send_message("That RP type already exists.", ephemeral=True)
+            return
+
     try:
-        await save_rp_data(interaction.user.id, interaction.guild_id, rp_type)
+        await add_rp_type(interaction.guild_id, rp_type)
     except Exception:
-        await interaction.response.send_message("That RP type already exists.", ephemeral=True)
+        logging.exception("Failed to add RP type")
+        await interaction.response.send_message("Failed to add RP type.", ephemeral=True)
         return
-    
+
     await interaction.response.send_message(f"Added new RP type `{rp_type}`.", ephemeral=True)
 
 
