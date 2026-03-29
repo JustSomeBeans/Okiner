@@ -255,11 +255,17 @@ async def remove_text(interaction: discord.Interaction, rp_type: str, text: str)
 #Error handling for the bot, very minimal currently
 #TODO: Identify future errors that will be produced by commands and handle them on a case-by-case basis, and add the corresponding code here
 @bot.event
+
 async def on_command_error(ctx: commands.Context, err) -> None:
+
     traceback_text = "".join(
+
         traceback.format_exception(type(err), err, err.__traceback__)
+
     )
+
     traceback_embed = discord.Embed(description=traceback_text, title=type(err))
+
     await ctx.reply(embed=traceback_embed)
 
 # Slash/app command error handling
