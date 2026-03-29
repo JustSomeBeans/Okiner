@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import traceback
 from discord.ext import commands
 import sqlite3
+import typing
 
 RP_FILE = "rp_data.json"  # TODO: make this configurable.
 DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories and make dynamic eventually.
@@ -50,14 +51,6 @@ def ensure_server_entry(data: dict[str, Any], guild_id: int) -> str:
         }
 
     return guild_id_str
-
-
-def require_guild(interaction: discord.Interaction) -> discord.Guild | None:
-    """Return the guild for guild-only commands, or `None` when used in DMs."""
-    if interaction.guild is None:
-        return None
-    return interaction.guild
-
 
 # Load local environment variables from `.env` so secrets stay out of source control.
 load_dotenv()
@@ -103,9 +96,7 @@ class OkinerBot(commands.Bot):
         # The command tree stores slash commands and handles sync with Discord.
         # ~~self.tree = app_commands.CommandTree(self)~~ No need to do this when subclassing commands.Bot
 
-    async def setup_hook(self) -> None:
-        # Sync slash commands during startup so Discord sees the latest command definitions.
-        await self.tree.sync()
+    # Syncing every startup is not ideal because of ratelimits! Added a prefix-based command to sync instead.
 
     async def on_ready(self) -> None:
         logging.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "unknown")
@@ -173,16 +164,12 @@ async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Mem
 
 
 @bot.tree.command(name="addimage", description="Add an image URL to an RP type.")
+@app_commands.guild_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Store a new image URL for a guild-specific RP type."""
-    guild = require_guild(interaction)
-    if guild is None:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
-        return
-
     data = load_rp_data()
-    guild_id = ensure_server_entry(data, guild.id)
+    guild_id = ensure_server_entry(data, interaction.guild_id)
     rp_entry = data["servers"][guild_id].get(rp_type)
 
     if not rp_entry:
@@ -195,16 +182,12 @@ async def add_image(interaction: discord.Interaction, rp_type: str, url: str) ->
 
 
 @bot.tree.command(name="removeimage", description="Remove an image URL from an RP type.")
+@app_commands.guild_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Remove an existing image URL from a guild-specific RP type."""
-    guild = require_guild(interaction)
-    if guild is None:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
-        return
-
     data = load_rp_data()
-    guild_id = ensure_server_entry(data, guild.id)
+    guild_id = ensure_server_entry(data, interaction.guild_id)
     rp_entry = data["servers"][guild_id].get(rp_type)
 
     if not rp_entry:
@@ -222,16 +205,12 @@ async def remove_image(interaction: discord.Interaction, rp_type: str, url: str)
 
 
 @bot.tree.command(name="addtext", description="Add a text template to an RP type.")
+@app_commands.guild_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
     """Store a new text template for a guild-specific RP type."""
-    guild = require_guild(interaction)
-    if guild is None:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
-        return
-
     data = load_rp_data()
-    guild_id = ensure_server_entry(data, guild.id)
+    guild_id = ensure_server_entry(data, interaction.guild_id)
     rp_entry = data["servers"][guild_id].get(rp_type)
 
     if not rp_entry:
@@ -242,18 +221,13 @@ async def add_text(interaction: discord.Interaction, rp_type: str, text: str) ->
     save_rp_data(data)
     await interaction.response.send_message(f"Added text to `{rp_type}`.", ephemeral=True)
 
-
 @bot.tree.command(name="removetext", description="Remove a text template from an RP type.")
+@app_commands.guild_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
     """Remove an existing text template from a guild-specific RP type."""
-    guild = require_guild(interaction)
-    if guild is None:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
-        return
-
     data = load_rp_data()
-    guild_id = ensure_server_entry(data, guild.id)
+    guild_id = ensure_server_entry(data, interaction.guild_id)
     rp_entry = data["servers"][guild_id].get(rp_type)
 
     if not rp_entry:
@@ -279,6 +253,21 @@ async def on_command_error(ctx: commands.Context, err) -> None:
     )
     traceback_embed = discord.Embed(description=traceback_text, title=type(err))
     await ctx.reply(embed=traceback_embed)
+
+# ----- SYNCING COMMANDS -----
+
+@bot.command(name="sync")
+@commands.is_owner()
+async def sync(ctx, scope: typing.Optional[str] = "local"):
+    """Sync slash commands, either globally or locally."""
+    if scope == "global":
+        synced = await bot.tree.sync()
+        await ctx.reply(f"Global Synced {len(synced)} commands. May take some time.")
+    elif scope == "local":
+        bot.tree.copy_global_to(guild=ctx.guild)
+        synced = await bot.tree.sync()
+        await ctx.reply(f"Synced {len(synced)} commands for this guild!")
+        
 
 # ----- MAIN EVENT LOOP -----
 def main() -> None:
