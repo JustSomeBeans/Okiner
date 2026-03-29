@@ -10,6 +10,10 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
+import traceback
+from discord.ext import commands
+import sqlite3
+
 RP_FILE = "rp_data.json"  # TODO: make this configurable.
 DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories and make dynamic eventually.
 
@@ -92,12 +96,12 @@ requested_permissions = discord.Permissions(
 )
 
 
-class OkinerBot(discord.Client):
+class OkinerBot(commands.Bot):
     def __init__(self) -> None:
-        super().__init__(intents=intents, application_id=int(APPLICATION_ID) if APPLICATION_ID else None)
+        super().__init__(intents=intents, command_prefix="oki!", application_id=int(APPLICATION_ID) if APPLICATION_ID else None, help_command=None)
 
         # The command tree stores slash commands and handles sync with Discord.
-        self.tree = app_commands.CommandTree(self)
+        # ~~self.tree = app_commands.CommandTree(self)~~ No need to do this when subclassing commands.Bot
 
     async def setup_hook(self) -> None:
         # Sync slash commands during startup so Discord sees the latest command definitions.
@@ -265,7 +269,50 @@ async def remove_text(interaction: discord.Interaction, rp_type: str, text: str)
     save_rp_data(data)
     await interaction.response.send_message(f"Removed text from `{rp_type}`.", ephemeral=True)
 
+# ------ EVENTS --------
+#Error handling for the bot, very minimal currently
+#TODO: Identify future errors that will be produced by commands and handle them on a case-by-case basis, and add the corresponding code here
+@bot.event
 
+async def on_command_error(ctx: commands.Context, err) -> None:
+
+    traceback_text = "".join(
+
+        traceback.format_exception(type(err), err, err.__traceback__)
+
+    )
+
+    traceback_embed = discord.Embed(description=traceback_text, title=type(err))
+
+    await ctx.reply(embed=traceback_embed)
+
+# Slash/app command error handling
+# Mirrors the classic command handler so we can see all errors in the same style, but also accounts for the differences in how responses work in the app command context.
+# TODO: Could eventually unify logging and maybe add more verbose error messages instead of common traceback dumps, but this is a good start for now.
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction, err: app_commands.AppCommandError
+) -> None:
+    orig = getattr(err, "original", err)
+
+    formatted = traceback.format_exception(type(orig), orig, orig.__traceback__)
+    traceback_text = "".join(formatted)[:4096]
+
+    embed = discord.Embed(
+        title=type(orig).__name__,
+        description=f"```py\n{traceback_text}\n```",
+    )
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+    except Exception:
+        logging.exception("Failed to send app command error reply")
+        # Should be rare. Could happen if the interaction times out or permissions are missing.
+
+# ----- MAIN EVENT LOOP -----
 def main() -> None:
     """Start the Discord client and block until the bot shuts down."""
     bot.run(TOKEN)
