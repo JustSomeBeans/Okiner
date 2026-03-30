@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import json
 import logging
 import os
@@ -141,6 +142,7 @@ class OkinerBot(commands.Bot):
                                ON DELETE CASCADE
                 )
             """)
+            await conn.commit()
 
     async def close(self):
         if self.db_pool:
@@ -204,17 +206,50 @@ async def ping(interaction: discord.Interaction) -> None:
 @app_commands.describe(rp_type="Which interaction to perform", target="Who to target")
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Member) -> None:
-    """
-    Placeholder for the main RP command.
+    """Basic command implimentation, just for debugging add and remove commands and new schema. This will be expanded on in the future."""
+    rp_type = rp_type.strip().lower()
 
-    The command is registered so the surrounding data and autocomplete flow can be
-    developed safely, but the actual RP embed/content logic is intentionally left
-    unfinished for a later pass.
-    """
-    await interaction.response.send_message(
-        f"The `/rp` command for `{rp_type}` targeting {target.mention} is not implemented yet.",
-        ephemeral=True,
+    async with bot.db_pool.acquire() as conn:
+        # Verify RP type exists
+        result = await conn.execute(
+            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
+            (interaction.guild_id, rp_type)
+        )
+        exists = await result.fetchone()
+        if not exists:
+            await interaction.response.send_message(
+                f"Unknown RP type `{rp_type}`.", ephemeral=True
+            )
+            return
+
+        # Fetch all text templates
+        result = await conn.execute(
+            "SELECT texts FROM roleplay_entries WHERE guild_id = ? AND type = ? AND texts IS NOT NULL",
+            (interaction.guild_id, rp_type)
+        )
+        texts = [row[0] for row in await result.fetchall()]
+
+        # Fetch all image URLs
+        result = await conn.execute(
+            "SELECT url FROM roleplay_entries WHERE guild_id = ? AND type = ? AND url IS NOT NULL",
+            (interaction.guild_id, rp_type)
+        )
+        images = [row[0] for row in await result.fetchall()]
+
+    # Fallbacks if no text or image exist
+    text = random.choice(texts) if texts else f"{interaction.user.display_name} interacts with {target.display_name}!"
+    image_url = random.choice(images) if images else None
+
+    # Build embed
+    embed = discord.Embed(
+        title=f"{interaction.user.display_name} to {target.display_name}",
+        description=text,
+        color=discord.Color.blurple()
     )
+    if image_url:
+        embed.set_image(url=image_url)
+
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="addimage", description="Add an image URL to an RP type.")
