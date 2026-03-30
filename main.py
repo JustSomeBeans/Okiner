@@ -202,6 +202,8 @@ async def ping(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("Pong!")
 
 
+# Verified to work with Imgur links with the .png extention, does not work with discord cdn, tenor, or danbooru links for some reason.
+# Haven't tested if it has to due with file extension or host specifically. 
 @bot.tree.command(name="rp", description="Perform an interaction between users.")
 @app_commands.describe(rp_type="Which interaction to perform", target="Who to target")
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
