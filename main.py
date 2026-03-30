@@ -121,6 +121,26 @@ class OkinerBot(commands.Bot):
 
         async with self.db_pool.acquire() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS rp_types (
+                    guild_id INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    PRIMARY KEY (guild_id, type)
+                    )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS roleplay_entries (
+                    user_id INTEGER NOT NULL,
+                    guild_id INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    url TEXT,
+                    texts TEXT,
+                    PRIMARY KEY (user_id, guild_id, type, url, texts),
+                    FOREIGN KEY (guild_id, type)
+                               REFERENCES rp_types (guild_id, type)
+                               ON DELETE CASCADE
+                )
+            """)
 
     async def close(self):
         if self.db_pool:
