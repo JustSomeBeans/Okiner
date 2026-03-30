@@ -22,6 +22,7 @@ DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories an
 async def async_execute_query(query: str, params: tuple = ()) -> None:
     """Helper function to execute any db query, and commits them asynchronously."""
     async with bot.db_pool.acquire() as conn:
+        await conn.execute("PRAGMA foreign_keys = ON") # Ensures it's on for every query since it's required for the ON DELETE CASCADE to work properly.
         await conn.execute(query, params)
         await conn.commit()
 
