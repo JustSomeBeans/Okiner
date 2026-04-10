@@ -80,7 +80,7 @@ class RPCommands(commands.Cog):
         self.bot = bot
 
     # ------------------------------------------------------------------ #
-    #  Core RP command                                                     #
+    #  Core RP command                                                   #
     # ------------------------------------------------------------------ #
 
     @app_commands.command(name="rp", description="Perform an interaction between users.")
@@ -168,7 +168,7 @@ class RPCommands(commands.Cog):
                 await interaction.response.send_message(embed=fallback_embed)
 
     # ------------------------------------------------------------------ #
-    #  Type management                                                     #
+    #  Type management                                                   #
     # ------------------------------------------------------------------ #
 
     @app_commands.command(name="addtype", description="Add a new RP type to this server.")
@@ -239,7 +239,7 @@ class RPCommands(commands.Cog):
         )
 
     # ------------------------------------------------------------------ #
-    #  Image management                                                    #
+    #  Image management                                                  #
     # ------------------------------------------------------------------ #
 
     @app_commands.command(name="addimage", description="Save an image URL under an RP type.")
@@ -346,7 +346,7 @@ class RPCommands(commands.Cog):
         )
 
     # ------------------------------------------------------------------ #
-    #  Text management                                                     #
+    #  Text management                                                   #
     # ------------------------------------------------------------------ #
 
     @app_commands.command(name="addtext", description="Save an embed text template under an RP type.")
@@ -443,7 +443,7 @@ class RPCommands(commands.Cog):
         )
 
     # ------------------------------------------------------------------ #
-    #  Action text management                                              #
+    #  Action text management                                            #
     # ------------------------------------------------------------------ #
 
     @app_commands.command(name="addactiontext", description="Save a dynamic action text template under an RP type.")
@@ -541,7 +541,7 @@ class RPCommands(commands.Cog):
         )
 
     # ------------------------------------------------------------------ #
-    #  Error handler                                                       #
+    #  Error handler                                                     #
     # ------------------------------------------------------------------ #
 
     async def cog_app_command_error(
