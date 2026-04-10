@@ -319,84 +319,87 @@ async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Mem
         return
 
     async with bot.db_pool.acquire() as conn:
-        # Fetch embed description templates
+        # 1. Fetch "Regular Text" (Now for the Title)
         text_rows = await conn.execute(
             "SELECT texts FROM roleplay_entries WHERE guild_id = ? AND type = ? AND texts IS NOT NULL",
             (interaction.guild_id, rp_type),
         )
         texts = [row[0] for row in await text_rows.fetchall()]
         
-        # Fetch action text templates (used for the title)
+        # 2. Fetch "Action Text" (Now for the Message Content)
         action_text_rows = await conn.execute(
             "SELECT action_texts FROM roleplay_entries WHERE guild_id = ? AND type = ? AND action_texts IS NOT NULL",
             (interaction.guild_id, rp_type),
         )
         action_texts = [row[0] for row in await action_text_rows.fetchall()]
 
-        # Fetch image URLs
+        # 3. Fetch Images
         image_rows = await conn.execute(
             "SELECT url FROM roleplay_entries WHERE guild_id = ? AND type = ? AND url IS NOT NULL",
             (interaction.guild_id, rp_type),
         )
         images = [row[0] for row in await image_rows.fetchall()]
 
-    # 1. Generate Embed Description (Mentions work fine here)
-    base_desc = random.choice(texts) if texts else "{user_name} interacts with {target_name}."
-    description = truncate_for_embed(
-        apply_placeholders(base_desc, interaction.user, target),
-        MAX_EMBED_DESCRIPTION_LENGTH,
-    )
-    
-    # 2. Generate Embed Title
-    # Logic: We MUST use display names here because Discord titles don't render <@ID>
+    # --- Logic for Embed Action Text (bold, top of description) ---
+    # Always use display names (never mentions) so it renders correctly on both
+    # desktop and mobile without showing raw <@userID> strings.
     if action_texts:
-        base_title = random.choice(action_texts)
-        # We manually replace {user} and {target} with names for the title context
-        raw_title = (
-            base_title.replace("{user}", interaction.user.display_name)
+        base_action = random.choice(action_texts)
+        raw_action = (
+            base_action
+            .replace("{user}", interaction.user.display_name)
             .replace("{target}", target.display_name)
             .replace("{user_name}", interaction.user.display_name)
             .replace("{target_name}", target.display_name)
         )
     else:
-        raw_title = f"{interaction.user.display_name} -> {target.display_name}"
-        
-    title = truncate_for_embed(raw_title, MAX_EMBED_TITLE_LENGTH)
+        # Default fallback if no action text exists
+        raw_action = f"{interaction.user.display_name} → {target.display_name}"
 
-    # 3. Handle Image
+    action_line = truncate_for_embed(f"**{raw_action}**", MAX_EMBED_DESCRIPTION_LENGTH)
+
+    # --- Logic for Embed RP Text (plain, below action text) ---
+    if texts:
+        base_text = random.choice(texts)
+        raw_text = (
+            base_text
+            .replace("{user}", interaction.user.display_name)
+            .replace("{target}", target.display_name)
+            .replace("{user_name}", interaction.user.display_name)
+            .replace("{target_name}", target.display_name)
+        )
+        rp_line = truncate_for_embed(raw_text, MAX_EMBED_DESCRIPTION_LENGTH - len(action_line) - 2)
+        description = f"{action_line}\n{rp_line}"
+    else:
+        description = action_line
+
+    description = truncate_for_embed(description, MAX_EMBED_DESCRIPTION_LENGTH)
+
+    # --- Handle Image ---
     normalized_images = [normalize_image_url(url) for url in images]
     valid_images = [url for url in normalized_images if is_valid_image_url(url)]
     image_url = random.choice(valid_images) if valid_images else None
 
     embed = discord.Embed(
-        title=title,
         description=description,
         color=discord.Color.blurple(),
     )
     if image_url:
         embed.set_image(url=image_url)
 
-    # 4. Send the message
+    # --- Send ---
     try:
         await interaction.response.send_message(
             embed=embed,
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
     except discord.HTTPException:
-        logging.warning("RP embed send failed; retrying without image.", exc_info=True)
-        fallback_embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
+        logging.warning("RP message send failed; retrying without image.", exc_info=True)
+        fallback_embed = discord.Embed(description=description, color=discord.Color.blurple())
         if interaction.response.is_done():
             await interaction.followup.send(embed=fallback_embed)
         else:
             await interaction.response.send_message(embed=fallback_embed)
-
-
-@bot.tree.command(name="ping", description="Quick check to confirm the bot is awake.")
-@app_commands.guild_only()
-@app_commands.default_permissions(manage_messages=True)
-@moderator_only()
-async def ping(interaction: discord.Interaction) -> None:
-    await interaction.response.send_message("Pong!", ephemeral=True)
 
 
 @bot.tree.command(name="addtype", description="Add a new RP type to this server.")
@@ -651,7 +654,6 @@ async def list_text(interaction: discord.Interaction, rp_type: str) -> None:
 @moderator_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_action_text(interaction: discord.Interaction, rp_type: str, action_text: str) -> None:
-    """Store a new dynamic RP action text with a warning if tags are missing."""
     rp_type = normalize_rp_type(rp_type)
     action_text = action_text.strip()
 
@@ -659,27 +661,7 @@ async def add_action_text(interaction: discord.Interaction, rp_type: str, action
         await interaction.response.send_message("Unknown RP type.", ephemeral=True)
         return
 
-    if not action_text:
-        await interaction.response.send_message("Action text entries can't be blank.", ephemeral=True)
-        return
-
-    if len(action_text) > MAX_TEXT_LENGTH:
-        await interaction.response.send_message(
-            f"Keep action text entries under {MAX_TEXT_LENGTH} characters.",
-            ephemeral=True,
-        )
-        return
-
-    duplicate = await fetch_one(
-        "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND action_texts = ?",
-        (interaction.guild_id, rp_type, action_text),
-    )
-    if duplicate is not None:
-        await interaction.response.send_message("That action text is already saved for this RP type.", ephemeral=True)
-        return
-
     # Check for placeholders
-    # We check for both {user}/{target} and their _name variants
     has_user = "{user}" in action_text or "{user_name}" in action_text
     has_target = "{target}" in action_text or "{target_name}" in action_text
 
@@ -691,10 +673,9 @@ async def add_action_text(interaction: discord.Interaction, rp_type: str, action
         warning = (
             f"⚠️ **Warning:** Your action text is missing the following dynamic tags: {', '.join(missing)}.\n\n"
             "**How it works:**\n"
-            "- `{user}`: Mentions the person using the command.\n"
-            "- `{target}`: Mentions the person they are targeting.\n"
-            "- `{user_name}` / `{target_name}`: Uses their display name (no mention).\n\n"
-            "Without these tags, the text will be the same regardless of who uses it. Do you want to add it anyway?"
+            "- `{user}` / `{target}`: Pings/Mentions the users.\n"
+            "- `{user_name}` / `{target_name}`: Uses their display names.\n\n"
+            "Do you want to add it anyway?"
         )
         view = ActionTextConfirmView(interaction.user.id, interaction.guild_id, rp_type, action_text)
         await interaction.response.send_message(warning, view=view, ephemeral=True)
