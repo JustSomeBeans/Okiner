@@ -18,11 +18,22 @@ MAX_MESSAGE_LENGTH = 1900
 MAX_TYPE_LENGTH = 64
 MAX_TEXT_LENGTH = 1500
 MAX_URL_LENGTH = 1000
+MAX_EMBED_TITLE_LENGTH = 256
+MAX_EMBED_DESCRIPTION_LENGTH = 4096
 
 
 def normalize_rp_type(raw_value: str) -> str:
     """Keep RP type names consistent so autocomplete and lookups stay predictable."""
     return raw_value.strip().lower()
+
+def normalize_image_url(url: str) -> str:
+    """
+    Clean up pasted image URLs before we validate or store them.
+
+    People often paste links wrapped in `<...>` or with extra whitespace. Discord
+    is much happier if we normalize those up front.
+    """
+    return url.strip().strip("<>")
 
 
 def is_valid_image_url(url: str) -> bool:
@@ -32,7 +43,10 @@ def is_valid_image_url(url: str) -> bool:
     This is not trying to prove the resource is a real image file. It just helps
     us avoid obviously bad input like blank strings or unsupported schemes.
     """
-    parsed = urlparse(url.strip())
+    if not url or any(character.isspace() for character in url):
+        return False
+
+    parsed = urlparse(url)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
@@ -50,6 +64,13 @@ def apply_placeholders(template: str, actor: discord.abc.User, target: discord.M
         .replace("{user_name}", actor.display_name)
         .replace("{target_name}", target.display_name)
     )
+
+
+def truncate_for_embed(text: str, limit: int) -> str:
+    """Trim text to a Discord-safe embed length without chopping mid-error."""
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
 
 
 def build_list_messages(title: str, entries: list[str]) -> list[str]:
@@ -331,23 +352,57 @@ async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Mem
         images = [row[0] for row in await image_rows.fetchall()]
 
     base_text = random.choice(texts) if texts else "{user_name} interacts with {target_name}."
-    description = apply_placeholders(base_text, interaction.user, target)
-    if len(description) > 4096:
-        description = f"{description[:4093]}..."
-    image_url = random.choice(images) if images else None
+    description = truncate_for_embed(
+        apply_placeholders(base_text, interaction.user, target),
+        MAX_EMBED_DESCRIPTION_LENGTH,
+    )
+    title = truncate_for_embed(
+        f"{interaction.user.display_name} -> {target.display_name}",
+        MAX_EMBED_TITLE_LENGTH,
+    )
+    # Normalize stored URLs (Imgur rewriting etc.) before validating them so the
+    # same logic that runs at add-time also runs at display-time for any entries
+    # that were saved before normalization was applied.
+    normalized_images = [normalize_image_url(url) for url in images]
+    valid_images = [url for url in normalized_images if is_valid_image_url(url)]
+    image_url = random.choice(valid_images) if valid_images else None
 
     embed = discord.Embed(
-        title=f"{interaction.user.display_name} -> {target.display_name}",
+        title=title,
         description=description,
         color=discord.Color.blurple(),
     )
     if image_url:
         embed.set_image(url=image_url)
 
-    await interaction.response.send_message(
-        embed=embed,
-        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-    )
+    try:
+        await interaction.response.send_message(
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+        )
+    except discord.HTTPException:
+        # If Discord rejects the embed, retry once without the image. That gives
+        # us a graceful fallback when a stored link is technically a URL but not
+        # something Discord can actually render as an embed image.
+        logging.warning("RP embed send failed; retrying without image.", exc_info=True)
+        fallback_embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.blurple(),
+        )
+        # The interaction may already be acknowledged at this point, so we must
+        # use followup.send rather than response.send_message to avoid a second
+        # "already responded" error from Discord.
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                embed=fallback_embed,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        else:
+            await interaction.response.send_message(
+                embed=fallback_embed,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
 
 
 @bot.tree.command(name="ping", description="Quick check to confirm the bot is awake.")
@@ -421,10 +476,19 @@ async def remove_type(interaction: discord.Interaction, rp_type: str) -> None:
 async def add_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Store a new image URL for a server RP type."""
     rp_type = normalize_rp_type(rp_type)
-    url = url.strip()
+    url = normalize_image_url(url)
 
     if not await rp_type_exists(interaction.guild_id, rp_type):
         await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    # Fail fast on standard Imgur page links
+    parsed = urlparse(url)
+    if parsed.netloc in {"imgur.com", "www.imgur.com"}:
+        await interaction.response.send_message(
+            "Please provide the direct image link (Right-click the image -> Copy image address). It should start with `i.imgur.com`, not `imgur.com`.",
+            ephemeral=True,
+        )
         return
 
     if not is_valid_image_url(url):
@@ -445,10 +509,10 @@ async def add_image(interaction: discord.Interaction, rp_type: str, url: str) ->
     if duplicate is not None:
         await interaction.response.send_message("That image is already saved for this RP type.", ephemeral=True)
         return
+    
 
     await add_rp_entry(interaction.user.id, interaction.guild_id, rp_type, url=url)
     await interaction.response.send_message(f"Added image to `{rp_type}`.", ephemeral=True)
-
 
 @bot.tree.command(name="removeimage", description="Remove a saved image URL from an RP type.")
 @app_commands.guild_only()
@@ -458,7 +522,7 @@ async def add_image(interaction: discord.Interaction, rp_type: str, url: str) ->
 async def remove_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
     """Remove an image URL from a server RP type."""
     rp_type = normalize_rp_type(rp_type)
-    url = url.strip()
+    url = normalize_image_url(url)
 
     if not await rp_type_exists(interaction.guild_id, rp_type):
         await interaction.response.send_message("Unknown RP type.", ephemeral=True)
