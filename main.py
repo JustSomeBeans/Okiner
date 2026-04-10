@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import random
-import json
 import logging
 import os
-import traceback
-import typing
-from typing import Any
-from urllib.parse import urlencode
+import random
+from pathlib import Path
+from urllib.parse import urlparse, urlencode
 
 import asqlite
 import discord
@@ -15,40 +12,154 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-RP_FILE = "rp_data.json"  # TODO: make this configurable.
-DEFAULT_RP_TYPES = ["hug", "bite", "hit"]  # TODO: revisit default categories and make dynamic eventually.
+DB_PATH = "rp.db"
+SCHEMA_PATH = Path(__file__).with_name("rp_schema.sql")
+MAX_MESSAGE_LENGTH = 1900
+MAX_TYPE_LENGTH = 64
+MAX_TEXT_LENGTH = 1500
+MAX_URL_LENGTH = 1000
+
+
+def normalize_rp_type(raw_value: str) -> str:
+    """Keep RP type names consistent so autocomplete and lookups stay predictable."""
+    return raw_value.strip().lower()
+
+
+def is_valid_image_url(url: str) -> bool:
+    """
+    Do a lightweight URL sanity check before storing links.
+
+    This is not trying to prove the resource is a real image file. It just helps
+    us avoid obviously bad input like blank strings or unsupported schemes.
+    """
+    parsed = urlparse(url.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def apply_placeholders(template: str, actor: discord.abc.User, target: discord.Member) -> str:
+    """
+    Fill the simple placeholders we support inside RP text.
+
+    We intentionally use plain string replacement instead of `str.format(...)`
+    so stored text cannot poke at object attributes or trigger weird formatting
+    edge cases.
+    """
+    return (
+        template.replace("{user}", actor.mention)
+        .replace("{target}", target.mention)
+        .replace("{user_name}", actor.display_name)
+        .replace("{target_name}", target.display_name)
+    )
+
+
+def build_list_messages(title: str, entries: list[str]) -> list[str]:
+    """
+    Split long list output into safe message-sized chunks.
+
+    Discord has message length limits, so list commands need chunking if a server
+    has a lot of saved entries.
+    """
+    if not entries:
+        return [f"{title}\nNothing saved yet."]
+
+    chunks: list[str] = []
+    current_chunk = title
+
+    for index, entry in enumerate(entries, start=1):
+        safe_entry = entry.replace("```", "'''")
+        if len(safe_entry) > 1200:
+            safe_entry = f"{safe_entry[:1197]}..."
+        line = f"\n{index}. {safe_entry}"
+        if len(current_chunk) + len(line) > MAX_MESSAGE_LENGTH:
+            chunks.append(current_chunk)
+            current_chunk = f"{title}\n{index}. {safe_entry}"
+        else:
+            current_chunk += line
+
+    chunks.append(current_chunk)
+    return chunks
+
+
+def moderator_only() -> app_commands.Check:
+    """
+    Restrict management commands to moderators.
+
+    `manage_messages` is a pretty normal "mod-level" permission without drifting
+    into full admin territory.
+    """
+
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            raise app_commands.NoPrivateMessage()
+
+        permissions = getattr(interaction.user, "guild_permissions", None)
+        if permissions and permissions.manage_messages:
+            return True
+
+        raise app_commands.MissingPermissions(["manage_messages"])
+
+    return app_commands.check(predicate)
 
 
 async def async_execute_query(query: str, params: tuple = ()) -> None:
-    """Helper function to execute any db query, and commits them asynchronously."""
+    """Run a write query and commit it right away."""
     async with bot.db_pool.acquire() as conn:
-        await conn.execute("PRAGMA foreign_keys = ON") # Ensures it's on for every query since it's required for the ON DELETE CASCADE to work properly.
+        await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute(query, params)
         await conn.commit()
 
 
-async def load_rp_data() -> dict[str, Any]:
-    """Load RP data from disk, creating a minimal file if it does not exist yet."""
-    # if not os.path.exists(RP_FILE):
-    #     data: dict[str, Any] = {"servers": {}}
-    #     save_rp_data(data)
-    #     return data
-
-    # with open(RP_FILE, "r", encoding="utf-8") as file_handle:
-    #     data = json.load(file_handle)
-
-    # if "servers" not in data or not isinstance(data["servers"], dict):
-    #     data["servers"] = {}
-
-    return None
+async def fetch_one(query: str, params: tuple = ()) -> tuple | None:
+    """Fetch a single database row."""
+    async with bot.db_pool.acquire() as conn:
+        result = await conn.execute(query, params)
+        return await result.fetchone()
 
 
-# async def save_rp_data(user_id: int, guild_id: int, types: str, texts: str = None, url: str = None) -> None:
-#    """Saves RP data into the rp.db database file."""
-#    await async_execute_query("INSERT INTO roleplay (user_id, guild_id, url, texts, type) VALUES (?, ?, ?, ?, ?)", (user_id, guild_id, url, texts, types))
+async def fetch_column(query: str, params: tuple = ()) -> list[str]:
+    """Fetch the first column from all returned rows as a plain string list."""
+    async with bot.db_pool.acquire() as conn:
+        result = await conn.execute(query, params)
+        rows = await result.fetchall()
+
+    return [str(row[0]) for row in rows]
+
+
+async def rp_type_exists(guild_id: int, rp_type: str) -> bool:
+    """Small helper so command code stays readable."""
+    row = await fetch_one(
+        "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
+        (guild_id, rp_type),
+    )
+    return row is not None
+
+
+async def send_chunked_response(
+    interaction: discord.Interaction,
+    messages: list[str],
+    *,
+    ephemeral: bool = True,
+) -> None:
+    """Send one or more response chunks without tripping interaction rules."""
+    allowed_mentions = discord.AllowedMentions.none()
+
+    first_message, *remaining_messages = messages
+    await interaction.response.send_message(
+        first_message,
+        ephemeral=ephemeral,
+        allowed_mentions=allowed_mentions,
+    )
+
+    for message in remaining_messages:
+        await interaction.followup.send(
+            message,
+            ephemeral=ephemeral,
+            allowed_mentions=allowed_mentions,
+        )
 
 
 async def add_rp_type(guild_id: int, rp_type: str) -> None:
+    """Create a new RP type for the current server."""
     await async_execute_query(
         "INSERT INTO rp_types (guild_id, type) VALUES (?, ?)",
         (guild_id, rp_type),
@@ -59,19 +170,19 @@ async def add_rp_entry(
     user_id: int,
     guild_id: int,
     rp_type: str,
-    text: str = None,
-    url: str = None,
+    *,
+    text: str | None = None,
+    url: str | None = None,
 ) -> None:
+    """Store a text or image entry tied to a server RP type."""
     await async_execute_query(
         "INSERT INTO roleplay_entries (user_id, guild_id, type, url, texts) VALUES (?, ?, ?, ?, ?)",
         (user_id, guild_id, rp_type, url, text),
     )
 
 
-# Load local environment variables from `.env` so secrets stay out of source control.
 load_dotenv()
 
-# Keep logging simple and readable during development and deployment.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -83,13 +194,11 @@ APPLICATION_ID = os.getenv("DISCORD_APPLICATION_ID")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is not set. Copy .env.example to .env and add your bot token.")
 
-# These are the gateway intents the bot currently expects to use.
 intents = discord.Intents.default()
 intents.presences = True
 intents.members = True
 intents.message_content = True
 
-# These permissions are used when generating the bot invite URL.
 requested_permissions = discord.Permissions(
     add_reactions=True,
     attach_files=True,
@@ -113,49 +222,26 @@ class OkinerBot(commands.Bot):
             application_id=int(APPLICATION_ID) if APPLICATION_ID else None,
             help_command=None,
         )
+        self.db_pool: asqlite.Pool | None = None
 
-        # The command tree stores slash commands and handles sync with Discord.
-        # ~~self.tree = app_commands.CommandTree(self)~~ No need to do this when subclassing commands.Bot
-
-    # DB Pool initialization
-    async def setup_hook(self):
-        self.db_pool = await asqlite.create_pool("rp.db")
+    async def setup_hook(self) -> None:
+        """Open the database pool and make sure the schema exists before commands run."""
+        self.db_pool = await asqlite.create_pool(DB_PATH)
 
         async with self.db_pool.acquire() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS rp_types (
-                    guild_id INTEGER NOT NULL,
-                    type TEXT NOT NULL,
-                    PRIMARY KEY (guild_id, type)
-                    )
-            """)
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS roleplay_entries (
-                    user_id INTEGER NOT NULL,
-                    guild_id INTEGER NOT NULL,
-                    type TEXT NOT NULL,
-                    url TEXT,
-                    texts TEXT,
-                    PRIMARY KEY (user_id, guild_id, type, url, texts),
-                    FOREIGN KEY (guild_id, type)
-                               REFERENCES rp_types (guild_id, type)
-                               ON DELETE CASCADE
-                )
-            """)
+            await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
             await conn.commit()
 
-    async def close(self):
-        if self.db_pool:
+    async def close(self) -> None:
+        """Shut down the database pool cleanly when the bot exits."""
+        if self.db_pool is not None:
             await self.db_pool.close()
         await super().close()
 
     async def on_ready(self) -> None:
-        logging.info(
-            "Logged in as %s (ID: %s)",
-            self.user,
-            self.user.id if self.user else "unknown",
-        )
+        """Log a quick startup summary once Discord says the bot is ready."""
+        logging.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "unknown")
 
         if APPLICATION_ID:
             logging.info("Bot invite URL: %s", build_invite_url(APPLICATION_ID))
@@ -177,14 +263,20 @@ async def rp_type_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ) -> list[app_commands.Choice[str]]:
-    """Suggest RP types for the current guild using the new schema."""
-    if not interaction.guild_id:
+    """Autocomplete RP types for the current server."""
+    if interaction.guild_id is None:
         return []
 
-    pattern = f"%{current}%"
+    pattern = f"%{normalize_rp_type(current)}%"
     async with bot.db_pool.acquire() as conn:
         result = await conn.execute(
-            "SELECT type FROM rp_types WHERE guild_id = ? AND LOWER(type) LIKE LOWER(?) ORDER BY type LIMIT 25",
+            """
+            SELECT type
+            FROM rp_types
+            WHERE guild_id = ? AND LOWER(type) LIKE ?
+            ORDER BY type COLLATE NOCASE
+            LIMIT 25
+            """,
             (interaction.guild_id, pattern),
         )
         rows = await result.fetchall()
@@ -194,297 +286,407 @@ async def rp_type_autocomplete(
 
 bot = OkinerBot()
 
-# ----- COMMANDS -----
 
-
-@bot.tree.command(name="ping", description="Check whether the bot is responding.")
-async def ping(interaction: discord.Interaction) -> None:
-    """Small health-check command used to confirm the bot is online."""
-    await interaction.response.send_message("Pong!")
-
-
-# Verified to work with Imgur links with the .png extention, does not work with discord cdn, tenor, or danbooru links for some reason.
-# Haven't tested if it has to due with file extension or host specifically. 
 @bot.tree.command(name="rp", description="Perform an interaction between users.")
+@app_commands.guild_only()
 @app_commands.describe(rp_type="Which interaction to perform", target="Who to target")
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def rp(interaction: discord.Interaction, rp_type: str, target: discord.Member) -> None:
-    """Basic command implimentation, just for debugging add and remove commands and new schema. This will be expanded on in the future."""
-    rp_type = rp_type.strip().lower()
+    """
+    Main public RP command.
+
+    This stays open to regular users. Everything else that manages stored data
+    gets locked down to moderators.
+    """
+    rp_type = normalize_rp_type(rp_type)
+
+    if not await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message(
+            f"I don't know the RP type `{rp_type}` in this server yet.",
+            ephemeral=True,
+        )
+        return
 
     async with bot.db_pool.acquire() as conn:
-        # Verify RP type exists
-        result = await conn.execute(
-            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type)
+        text_rows = await conn.execute(
+            """
+            SELECT texts
+            FROM roleplay_entries
+            WHERE guild_id = ? AND type = ? AND texts IS NOT NULL
+            ORDER BY texts COLLATE NOCASE
+            """,
+            (interaction.guild_id, rp_type),
         )
-        exists = await result.fetchone()
-        if not exists:
-            await interaction.response.send_message(
-                f"Unknown RP type `{rp_type}`.", ephemeral=True
-            )
-            return
+        texts = [row[0] for row in await text_rows.fetchall()]
 
-        # Fetch all text templates
-        result = await conn.execute(
-            "SELECT texts FROM roleplay_entries WHERE guild_id = ? AND type = ? AND texts IS NOT NULL",
-            (interaction.guild_id, rp_type)
+        image_rows = await conn.execute(
+            """
+            SELECT url
+            FROM roleplay_entries
+            WHERE guild_id = ? AND type = ? AND url IS NOT NULL
+            ORDER BY url COLLATE NOCASE
+            """,
+            (interaction.guild_id, rp_type),
         )
-        texts = [row[0] for row in await result.fetchall()]
+        images = [row[0] for row in await image_rows.fetchall()]
 
-        # Fetch all image URLs
-        result = await conn.execute(
-            "SELECT url FROM roleplay_entries WHERE guild_id = ? AND type = ? AND url IS NOT NULL",
-            (interaction.guild_id, rp_type)
-        )
-        images = [row[0] for row in await result.fetchall()]
-
-    # Fallbacks if no text or image exist
-    text = random.choice(texts) if texts else f"{interaction.user.display_name} interacts with {target.display_name}!"
+    base_text = random.choice(texts) if texts else "{user_name} interacts with {target_name}."
+    description = apply_placeholders(base_text, interaction.user, target)
+    if len(description) > 4096:
+        description = f"{description[:4093]}..."
     image_url = random.choice(images) if images else None
 
-    # Build embed
     embed = discord.Embed(
-        title=f"{interaction.user.display_name} to {target.display_name}",
-        description=text,
-        color=discord.Color.blurple()
+        title=f"{interaction.user.display_name} -> {target.display_name}",
+        description=description,
+        color=discord.Color.blurple(),
     )
     if image_url:
         embed.set_image(url=image_url)
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(
+        embed=embed,
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
 
 
-@bot.tree.command(name="addimage", description="Add an image URL to an RP type.")
+@bot.tree.command(name="ping", description="Quick check to confirm the bot is awake.")
 @app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
+async def ping(interaction: discord.Interaction) -> None:
+    """Tiny utility command for moderators while testing or debugging."""
+    await interaction.response.send_message("Pong!", ephemeral=True)
+
+
+@bot.tree.command(name="addtype", description="Add a new RP type to this server.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
+async def add_type(interaction: discord.Interaction, rp_type: str) -> None:
+    """Create a new RP category so text and image entries can be filed under it."""
+    rp_type = normalize_rp_type(rp_type)
+
+    if not rp_type:
+        await interaction.response.send_message("RP type names can't be blank.", ephemeral=True)
+        return
+
+    if len(rp_type) > MAX_TYPE_LENGTH:
+        await interaction.response.send_message("RP type names need to stay under 65 characters.", ephemeral=True)
+        return
+
+    if not rp_type.replace("-", "").replace("_", "").isalnum():
+        await interaction.response.send_message(
+            "Keep RP type names to letters, numbers, hyphens, or underscores.",
+            ephemeral=True,
+        )
+        return
+
+    if await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message("That RP type already exists.", ephemeral=True)
+        return
+
+    await add_rp_type(interaction.guild_id, rp_type)
+    await interaction.response.send_message(f"Added RP type `{rp_type}`.", ephemeral=True)
+
+
+@bot.tree.command(name="removetype", description="Remove an RP type and everything saved under it.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
+@app_commands.autocomplete(rp_type=rp_type_autocomplete)
+async def remove_type(interaction: discord.Interaction, rp_type: str) -> None:
+    """Delete an RP type and let the database cascade the related entries."""
+    rp_type = normalize_rp_type(rp_type)
+
+    if not await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    await async_execute_query(
+        "DELETE FROM rp_types WHERE guild_id = ? AND type = ?",
+        (interaction.guild_id, rp_type),
+    )
+    await interaction.response.send_message(
+        f"Removed RP type `{rp_type}` and all of its saved entries.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="addimage", description="Save an image URL under an RP type.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
-    rp_type = rp_type.strip().lower()
-    """Store a new image URL for a guild-specific RP type."""
-    async with bot.db_pool.acquire() as conn:
-        result = await conn.execute(
-            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type),
-        )
-        exists = await result.fetchone()
+    """Store a new image URL for a server RP type."""
+    rp_type = normalize_rp_type(rp_type)
+    url = url.strip()
 
-        if not exists:
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-            return
+    if not await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    if not is_valid_image_url(url):
+        await interaction.response.send_message(
+            "That doesn't look like a valid `http` or `https` URL.",
+            ephemeral=True,
+        )
+        return
+
+    if len(url) > MAX_URL_LENGTH:
+        await interaction.response.send_message("That URL is longer than I want to store safely.", ephemeral=True)
+        return
+
+    duplicate = await fetch_one(
+        "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND url = ?",
+        (interaction.guild_id, rp_type, url),
+    )
+    if duplicate is not None:
+        await interaction.response.send_message("That image is already saved for this RP type.", ephemeral=True)
+        return
 
     await add_rp_entry(interaction.user.id, interaction.guild_id, rp_type, url=url)
     await interaction.response.send_message(f"Added image to `{rp_type}`.", ephemeral=True)
 
 
-@bot.tree.command(name="removeimage", description="Remove an image URL from an RP type.")
+@bot.tree.command(name="removeimage", description="Remove a saved image URL from an RP type.")
 @app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_image(interaction: discord.Interaction, rp_type: str, url: str) -> None:
-    """Remove an existing image URL from a guild-specific RP type using the new schema."""
-    rp_type = rp_type.strip().lower()
-    async with bot.db_pool.acquire() as conn:
-        # Verify the RP type exists for this guild
-        result = await conn.execute(
-            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type),
-        )
-        exists = await result.fetchone()
-        if not exists:
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-            return
+    """Remove an image URL from a server RP type."""
+    rp_type = normalize_rp_type(rp_type)
+    url = url.strip()
 
-        # Verify the specific image entry exists
-        result = await conn.execute(
-            "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND user_id = ? AND type = ? AND url = ?",
-            (interaction.guild_id, interaction.user.id, rp_type, url),
-        )
-        rp_entry = await result.fetchone()
-        if not rp_entry:
-            await interaction.response.send_message("That image URL was not found for this RP type.", ephemeral=True)
-            return
+    if not await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    existing = await fetch_one(
+        "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND url = ?",
+        (interaction.guild_id, rp_type, url),
+    )
+    if existing is None:
+        await interaction.response.send_message("That image URL isn't saved under this RP type.", ephemeral=True)
+        return
 
     await async_execute_query(
-        "DELETE FROM roleplay_entries WHERE guild_id = ? AND user_id = ? AND type = ? AND url = ?",
-        (interaction.guild_id, interaction.user.id, rp_type, url),
+        "DELETE FROM roleplay_entries WHERE guild_id = ? AND type = ? AND url = ?",
+        (interaction.guild_id, rp_type, url),
     )
     await interaction.response.send_message(f"Removed image from `{rp_type}`.", ephemeral=True)
 
 
-@bot.tree.command(name="addtext", description="Add a text template to an RP type.")
+@bot.tree.command(name="listimage", description="List the saved image URLs for an RP type.")
 @app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
+@app_commands.autocomplete(rp_type=rp_type_autocomplete)
+async def list_image(interaction: discord.Interaction, rp_type: str) -> None:
+    """Show every stored image URL for the chosen RP type."""
+    rp_type = normalize_rp_type(rp_type)
+
+    if not await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    images = await fetch_column(
+        """
+        SELECT DISTINCT url
+        FROM roleplay_entries
+        WHERE guild_id = ? AND type = ? AND url IS NOT NULL
+        ORDER BY url COLLATE NOCASE
+        """,
+        (interaction.guild_id, rp_type),
+    )
+    await send_chunked_response(
+        interaction,
+        build_list_messages(f"Saved images for `{rp_type}`:", images),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="addtext", description="Save a text template under an RP type.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def add_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
-    """Store a new text template for a guild-specific RP type using the new schema."""
-    rp_type = rp_type.strip().lower()
-    async with bot.db_pool.acquire() as conn:
-        result = await conn.execute(
-            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type),
-        )
-        exists = await result.fetchone()
+    """Store a new RP text template for a server RP type."""
+    rp_type = normalize_rp_type(rp_type)
+    text = text.strip()
 
-        if not exists:
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-            return
+    if not await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    if not text:
+        await interaction.response.send_message("Text entries can't be blank.", ephemeral=True)
+        return
+
+    if len(text) > MAX_TEXT_LENGTH:
+        await interaction.response.send_message(
+            f"Keep text entries under {MAX_TEXT_LENGTH} characters so they stay usable in Discord.",
+            ephemeral=True,
+        )
+        return
+
+    duplicate = await fetch_one(
+        "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND texts = ?",
+        (interaction.guild_id, rp_type, text),
+    )
+    if duplicate is not None:
+        await interaction.response.send_message("That text is already saved for this RP type.", ephemeral=True)
+        return
 
     await add_rp_entry(interaction.user.id, interaction.guild_id, rp_type, text=text)
     await interaction.response.send_message(f"Added text to `{rp_type}`.", ephemeral=True)
 
 
-@bot.tree.command(name="removetext", description="Remove a text template from an RP type.")
+@bot.tree.command(name="removetext", description="Remove a saved text template from an RP type.")
 @app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
 async def remove_text(interaction: discord.Interaction, rp_type: str, text: str) -> None:
-    """Remove an existing text template from a guild-specific RP type using the new schema."""
-    rp_type = rp_type.strip().lower()
-    async with bot.db_pool.acquire() as conn:
-        # Verify the RP type exists for this guild
-        result = await conn.execute(
-            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type),
-        )
-        exists = await result.fetchone()
-        if not exists:
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-            return
+    """Remove a text template from a server RP type."""
+    rp_type = normalize_rp_type(rp_type)
+    text = text.strip()
 
-        # Verify the specific text entry exists
-        result = await conn.execute(
-            "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND user_id = ? AND type = ? AND texts = ?",
-            (interaction.guild_id, interaction.user.id, rp_type, text),
-        )
-        rp_entry = await result.fetchone()
-        if not rp_entry:
-            await interaction.response.send_message("That text entry was not found for this RP type.", ephemeral=True)
-            return
+    if not await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
+
+    existing = await fetch_one(
+        "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND texts = ?",
+        (interaction.guild_id, rp_type, text),
+    )
+    if existing is None:
+        await interaction.response.send_message("That text isn't saved under this RP type.", ephemeral=True)
+        return
 
     await async_execute_query(
-        "DELETE FROM roleplay_entries WHERE guild_id = ? AND user_id = ? AND type = ? AND texts = ?",
-        (interaction.guild_id, interaction.user.id, rp_type, text),
+        "DELETE FROM roleplay_entries WHERE guild_id = ? AND type = ? AND texts = ?",
+        (interaction.guild_id, rp_type, text),
     )
     await interaction.response.send_message(f"Removed text from `{rp_type}`.", ephemeral=True)
 
 
-@bot.tree.command(name="addtype", description="Add a new RP type to the server.")
+@bot.tree.command(name="listtext", description="List the saved text templates for an RP type.")
 @app_commands.guild_only()
-async def add_type(interaction: discord.Interaction, rp_type: str) -> None:
-    """Add a new RP type to the server, which can then have text templates and image URLs added to it using the other commands."""
-    rp_type = rp_type.strip().lower()
-    if not rp_type:
-        await interaction.response.send_message("RP type cannot be empty.", ephemeral=True)
-        return
-    if len(rp_type) > 64:
-        await interaction.response.send_message("RP type too long.", ephemeral=True)
-        return
-
-    async with bot.db_pool.acquire() as conn:
-        result = await conn.execute(
-            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type),
-        )
-        exists = await result.fetchone()
-        if exists:
-            await interaction.response.send_message("That RP type already exists.", ephemeral=True)
-            return
-
-    try:
-        await add_rp_type(interaction.guild_id, rp_type)
-    except Exception:
-        logging.exception("Failed to add RP type")
-        await interaction.response.send_message("Failed to add RP type.", ephemeral=True)
-        return
-
-    await interaction.response.send_message(f"Added new RP type `{rp_type}`.", ephemeral=True)
-
-
-@bot.tree.command(name="removetype", description="Remove an RP type from the server.")
-@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
 @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-async def remove_type(interaction: discord.Interaction, rp_type: str) -> None:
-    """Remove an RP type from the server, which also removes all associated text entries and image URLs."""
-    rp_type = rp_type.strip().lower()
-    async with bot.db_pool.acquire() as conn:
-        result = await conn.execute(
-            "SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type),
-        )
-        exists = await result.fetchone()
-        if not exists:
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-            return
+async def list_text(interaction: discord.Interaction, rp_type: str) -> None:
+    """Show every stored text template for the chosen RP type."""
+    rp_type = normalize_rp_type(rp_type)
 
-    try:
-        await async_execute_query(
-            "DELETE FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type),
-        )
-        await interaction.response.send_message(
-            f"Removed RP type `{rp_type}` and all associated entries.", ephemeral=True
-        )
-    except Exception:
-        logging.exception("Failed to remove RP type")
-        await interaction.response.send_message("Failed to remove RP type.", ephemeral=True)
+    if not await rp_type_exists(interaction.guild_id, rp_type):
+        await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+        return
 
-
-# ------ EVENTS --------
-#Error handling for the bot, very minimal currently
-#TODO: Identify future errors that will be produced by commands and handle them on a case-by-case basis, and add the corresponding code here
-@bot.event
-async def on_command_error(ctx: commands.Context, err) -> None:
-    traceback_text = "".join(
-        traceback.format_exception(type(err), err, err.__traceback__)
+    texts = await fetch_column(
+        """
+        SELECT DISTINCT texts
+        FROM roleplay_entries
+        WHERE guild_id = ? AND type = ? AND texts IS NOT NULL
+        ORDER BY texts COLLATE NOCASE
+        """,
+        (interaction.guild_id, rp_type),
+    )
+    await send_chunked_response(
+        interaction,
+        build_list_messages(f"Saved texts for `{rp_type}`:", texts),
+        ephemeral=True,
     )
 
-    traceback_embed = discord.Embed(description=traceback_text, title=type(err))
 
-    await ctx.reply(embed=traceback_embed)
+@bot.tree.command(name="listtype", description="List all RP types configured for this server.")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@moderator_only()
+async def list_type(interaction: discord.Interaction) -> None:
+    """Show every RP type currently stored for the server."""
+    rp_types = await fetch_column(
+        """
+        SELECT type
+        FROM rp_types
+        WHERE guild_id = ?
+        ORDER BY type COLLATE NOCASE
+        """,
+        (interaction.guild_id,),
+    )
+    await send_chunked_response(
+        interaction,
+        build_list_messages("RP types in this server:", rp_types),
+        ephemeral=True,
+    )
 
 
-# Slash/app command error handling
-# Mirrors the classic command handler so we can see all errors in the same style, but also accounts for the differences in how responses work in the app command context.
-# TODO: Could eventually unify logging and maybe add more verbose error messages instead of common traceback dumps, but this is a good start for now.
 @bot.tree.error
 async def on_app_command_error(
-    interaction: discord.Interaction, err: app_commands.AppCommandError
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError,
 ) -> None:
-    orig = getattr(err, "original", err)
+    """Keep command errors friendly for users while still logging the real details."""
+    original = getattr(error, "original", error)
 
-    formatted = traceback.format_exception(type(orig), orig, orig.__traceback__)
-    traceback_text = "".join(formatted)[:4096]
+    if isinstance(error, app_commands.MissingPermissions):
+        message = "That one is for mods only."
+    elif isinstance(error, app_commands.NoPrivateMessage):
+        message = "That command only works inside a server."
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        message = f"That command is cooling down. Try again in {error.retry_after:.1f}s."
+    else:
+        logging.error(
+            "Unhandled app command error",
+            exc_info=(type(original), original, original.__traceback__),
+        )
+        message = "Something went wrong while running that command. The error was logged."
 
-    embed = discord.Embed(
-        title=type(orig).__name__,
-        description=f"```py\n{traceback_text}\n```",
-    )
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
 
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-    except Exception:
-        logging.exception("Failed to send app command error reply")
-        # Should be rare. Could happen if the interaction times out or permissions are missing.
-
-
-# ----- SYNCING COMMANDS -----
 
 @bot.command(name="sync")
 @commands.is_owner()
-async def sync(ctx, scope: typing.Optional[str] = "local"):
-    """Sync slash commands, either globally or locally."""
+async def sync(ctx: commands.Context, scope: str = "local") -> None:
+    """Manual slash-command sync helper for development."""
+    scope = scope.lower()
+
     if scope == "global":
         synced = await bot.tree.sync()
-        await ctx.reply(f"Global Synced {len(synced)} commands. May take some time.")
-    elif scope == "local":
-        bot.tree.copy_global_to(guild=ctx.guild)
-        synced = await bot.tree.sync()
-        await ctx.reply(f"Synced {len(synced)} commands for this guild!")
+        await ctx.reply(f"Global sync finished. {len(synced)} commands updated.")
+        return
+
+    if ctx.guild is None:
+        await ctx.reply("Local sync only works inside a server.")
+        return
+
+    synced = await bot.tree.sync(guild=ctx.guild)
+    await ctx.reply(f"Local sync finished for this server. {len(synced)} commands updated.")
 
 
-# ----- MAIN EVENT LOOP -----
+@sync.error
+async def sync_error(ctx: commands.Context, error: commands.CommandError) -> None:
+    """Keep the owner-only sync command from dumping raw tracebacks into chat."""
+    if isinstance(error, commands.NotOwner):
+        await ctx.reply("That command is owner-only.")
+        return
+
+    logging.error(
+        "Unhandled sync command error",
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    await ctx.reply("Sync failed. Check the logs for details.")
+
+
 def main() -> None:
-    """Start the Discord client and block until the bot shuts down."""
+    """Start the bot and keep it running until Discord disconnects it."""
     bot.run(TOKEN)
 
 
