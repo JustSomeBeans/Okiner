@@ -83,6 +83,66 @@ python main.py
 python3 main.py
 ```
 
-The current starter command is a slash command:
+After the bot starts, run `oki!sync` (owner only) in a server to register slash commands. Use `oki!sync global` to push them globally, or just `oki!sync` to push to the current server only (faster for testing).
 
-- `/ping`
+## Commands
+
+All commands are slash commands and only work inside servers. Management commands require **Manage Messages** permission.
+
+### Roleplay
+
+| Command | Description |
+|---|---|
+| `/rp <type> <target>` | Perform an RP interaction between you and a target member. Picks a random image, action text, and embed text from what's saved under that type. |
+
+### Type Management *(mod only)*
+
+| Command | Description |
+|---|---|
+| `/addtype <type>` | Register a new RP type for this server. Names must be alphanumeric with hyphens/underscores, max 64 characters. |
+| `/removetype <type>` | Delete an RP type and everything saved under it (cascades to images, texts, and action texts). |
+| `/listtype` | Show all RP types registered in this server. |
+
+### Image Management *(mod only)*
+
+| Command | Description |
+|---|---|
+| `/addimage <type> <url>` | Save an image URL under an RP type. Must be a direct `http`/`https` link. Imgur gallery links (`imgur.com`) are rejected — use the direct image link (`i.imgur.com`). |
+| `/removeimage <type> <url>` | Remove a saved image URL from an RP type. |
+| `/listimage <type>` | List all saved image URLs for an RP type. |
+
+### Text Management *(mod only)*
+
+| Command | Description |
+|---|---|
+| `/addtext <type> <text>` | Save an embed text template under an RP type. Max 1500 characters. Supports `{user}`, `{target}`, `{user_name}`, `{target_name}` placeholders. |
+| `/removetext <type> <text>` | Remove a saved text template from an RP type. |
+| `/listtext <type>` | List all saved text templates for an RP type. |
+
+### Action Text Management *(mod only)*
+
+Action texts appear as the bolded header line in the RP embed (e.g. *"Alice hugs Bob"*). They support the same placeholders as regular texts.
+
+| Command | Description |
+|---|---|
+| `/addactiontext <type> <action_text>` | Save an action text template. You'll get a warning if `{user}` or `{target}` placeholders are missing, but you can still save it. Max 1500 characters. |
+| `/removeactiontext <type> <action_text>` | Remove a saved action text template. |
+| `/listactiontext <type>` | List all saved action text templates for an RP type. |
+
+### Placeholders
+
+These tags are replaced dynamically when `/rp` is used:
+
+| Tag | Replaced with |
+|---|---|
+| `{user}` | Mention of the person who ran `/rp` |
+| `{target}` | Mention of the target member |
+| `{user_name}` | Display name of the person who ran `/rp` |
+| `{target_name}` | Display name of the target member |
+
+## Owner Commands
+
+| Command | Description |
+|---|---|
+| `oki!sync` | Sync slash commands to the current server. |
+| `oki!sync global` | Sync slash commands globally (takes up to an hour to propagate). |
