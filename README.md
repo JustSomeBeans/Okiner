@@ -121,13 +121,20 @@ All commands are slash commands and only work inside servers. Management command
 
 ### Action Text Management *(mod only)*
 
-Action texts appear as the bolded header line in the RP embed (e.g. *"Alice hugs Bob"*). They support the same placeholders as regular texts.
+Action texts appear as the bolded header line in the RP embed (e.g. *"Jane hugs Bob"*). They support the same placeholders as regular texts.
 
 | Command | Description |
 |---|---|
 | `/addactiontext <type> <action_text>` | Save an action text template. You'll get a warning if `{user}` or `{target}` placeholders are missing, but you can still save it. Max 1500 characters. |
 | `/removeactiontext <type> <action_text>` | Remove a saved action text template. |
 | `/listactiontext <type>` | List all saved action text templates for an RP type. |
+
+### Self Case Management *(mod only)*
+
+Self cases handle what happens when a user targets themself with an RP command. RP types do not need to have a self case, and will work fine without one.
+
+|---|---|
+/add
 
 ### Placeholders
 

@@ -114,3 +114,18 @@ async def add_self_case(
         """,
         (guild_id, rp_type, text, action_text, url),
     )
+
+async def fetch_self_case(guild_id: int, rp_type: str) -> tuple | None:
+    """Fetch the self targeting ovveride for a speciic type."""
+    return await fetch_one(
+        "SELECT texts, action_texts, url FROM rp_self_cases WHERE guild_id = ? AND type = ?",
+        (guild_id, rp_type),
+    )
+
+
+async def remove_self_case(guild_id: int, rp_type: str) -> None:
+    """Remove the self targeting override for a specific type."""
+    await execute_query(
+        "DELETE FROM rp_self_cases WHERE guild_id = ? AND type = ?",
+        (guild_id, rp_type),
+    )

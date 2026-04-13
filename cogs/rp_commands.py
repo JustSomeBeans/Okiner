@@ -254,6 +254,52 @@ class RPCommands(commands.Cog):
 
         await database.add_self_case(interaction.guild_id, rp_type, text, action_text, image)
         await interaction.response.send_message(f"Set self case override for `{rp_type}`.", ephemeral=True)
+    
+    @app_commands.command(name="removeselfcase", description="Remove the custom self-targeting response for an RP type.")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_messages=True)
+    @moderator_only()
+    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
+    async def remove_self_case(self, interaction: discord.Interaction, rp_type: str) -> None:
+        rp_type = normalize_rp_type(rp_type)
+
+        if not await database.rp_type_exists(interaction.guild_id, rp_type):
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
+
+        existing = await database.fetch_self_case(interaction.guild_id, rp_type)
+        if not existing:
+            await interaction.respone.send_message("No self case override is set for `{rp_type}`.", ephemeral=True)
+            return
+        
+        await database.remove_self_case(interaction.guild_id, rp_type)
+        await interaction.response.send_message(f"Removed self case override for `{rp_type}`.", ephemeral=True)
+
+    @app_commands.command(name="listselfcase", description="Show the custom self-targeting response configured for an RP type.")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_messages=True)
+    @moderator_only()
+    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
+    async def list_self_case(self, interaction: discord.Interaction, rp_type: str) -> None:
+        rp_type = normalize_rp_type(rp_type)
+
+        if not await database.rp_type_exists(interaction.guild_id, rp_type):
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
+
+        row = await database.fetch_self_case(interaction.guild_id, rp_type)
+        if not row:
+            await interaction.response.send_message(f"No self case override is set for `{rp_type}`.", ephemeral=True)
+            return
+
+        text, action_text, url = row
+        
+        details = [f"**Self Case for `{rp_type}`:**"]
+        details.append(f"**Action Text:** {action_text or '*None (Default)*'}")
+        details.append(f"**Embed Text:** {text or '*None*'}")
+        details.append(f"**Image URL:** {url or '*None*'}")
+
+        await interaction.response.send_message("\n".join(details), ephemeral=True)
 
     # ------------------------------------------------------------------ #
     #  Type management                                                   #
