@@ -133,8 +133,11 @@ Action texts appear as the bolded header line in the RP embed (e.g. *"Jane hugs 
 
 Self cases handle what happens when a user targets themself with an RP command. RP types do not need to have a self case, and will work fine without one.
 
+| Command | Description |
 |---|---|
-/add
+| `/addselfcase <type> <text> <action_text> <url>` | Set a custom response for when a user targets themselves. |
+| `/removeselfcase <type>` | Remove the custom self targeting response for an RP type |
+| `/listselfcase <type>` | Show the current self targeting response configured for an RP type |
 
 ### Placeholders
 
