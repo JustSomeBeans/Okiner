@@ -42,6 +42,7 @@ from autocomplete import rp_type_autocomplete
 from checks import moderator_only
 from config import MAX_EMBED_DESCRIPTION_LENGTH, MAX_TEXT_LENGTH, MAX_TYPE_LENGTH, MAX_URL_LENGTH
 from utils import (
+    apply_placeholders,
     build_list_messages,
     is_valid_image_url,
     normalize_image_url,
@@ -57,7 +58,12 @@ async def send_chunked_response(
     *,
     ephemeral: bool = True,
 ) -> None:
-    """Send one or more response chunks without tripping interaction rules."""
+    """Send one or more response chunks without tripping interaction rules.
+
+    Discord requires the first response to go through interaction.response and all
+    follow-ups through interaction.followup — you can't call response.send_message twice.
+    build_list_messages handles the splitting; this handles the sending.
+    """
     allowed_mentions = discord.AllowedMentions.none()
     first_message, *remaining_messages = messages
     await interaction.response.send_message(
@@ -90,6 +96,11 @@ class RPCommands(commands.Cog):
     async def rp(self, interaction: discord.Interaction, rp_type: str, target: discord.Member) -> None:
         rp_type = normalize_rp_type(rp_type)
 
+        # guild_id can theoretically be None even with @guild_only if something goes sideways
+        if interaction.guild_id is None or self.bot.db_pool is None:
+            await interaction.response.send_message("This command only works inside a server.", ephemeral=True)
+            return
+
         if not await database.rp_type_exists(interaction.guild_id, rp_type):
             await interaction.response.send_message(
                 f"I don't know the RP type `{rp_type}` in this server yet.",
@@ -117,28 +128,15 @@ class RPCommands(commands.Cog):
             images = [row[0] for row in await image_rows.fetchall()]
 
         if action_texts:
-            base_action = random.choice(action_texts)
-            raw_action = (
-                base_action
-                .replace("{user}", interaction.user.display_name)
-                .replace("{target}", target.display_name)
-                .replace("{user_name}", interaction.user.display_name)
-                .replace("{target_name}", target.display_name)
-            )
+            # apply_placeholders handles all four {user}/{target}/{user_name}/{target_name} substitutions
+            raw_action = apply_placeholders(random.choice(action_texts), interaction.user, target)
         else:
             raw_action = f"{interaction.user.display_name} → {target.display_name}"
 
         action_line = truncate_for_embed(f"**{raw_action}**", MAX_EMBED_DESCRIPTION_LENGTH)
 
         if texts:
-            base_text = random.choice(texts)
-            raw_text = (
-                base_text
-                .replace("{user}", interaction.user.display_name)
-                .replace("{target}", target.display_name)
-                .replace("{user_name}", interaction.user.display_name)
-                .replace("{target_name}", target.display_name)
-            )
+            raw_text = apply_placeholders(random.choice(texts), interaction.user, target)
             rp_line = truncate_for_embed(raw_text, MAX_EMBED_DESCRIPTION_LENGTH - len(action_line) - 2)
             description = f"{action_line}\n{rp_line}"
         else:
@@ -160,8 +158,11 @@ class RPCommands(commands.Cog):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException:
+            # Most likely a bad image URL that Discord couldn't load. Try again without it.
             logging.warning("RP message send failed; retrying without image.", exc_info=True)
             fallback_embed = discord.Embed(description=description, color=discord.Color.blurple())
+            # By the time we're in the except block the response might already be marked done
+            # even if it technically errored, so we have to check before deciding which path to use.
             if interaction.response.is_done():
                 await interaction.followup.send(embed=fallback_embed)
             else:
@@ -175,6 +176,9 @@ class RPCommands(commands.Cog):
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_messages=True)
     @moderator_only()
+    # default_permissions hides the command in the UI for users without the permission.
+    # moderator_only() is the actual runtime enforcement — default_permissions alone can be
+    # overridden by server admins in the Discord integration settings, so we want both.
     async def add_type(self, interaction: discord.Interaction, rp_type: str) -> None:
         rp_type = normalize_rp_type(rp_type)
 
@@ -184,11 +188,13 @@ class RPCommands(commands.Cog):
 
         if len(rp_type) > MAX_TYPE_LENGTH:
             await interaction.response.send_message(
-                "RP type names need to stay under 65 characters.", ephemeral=True
+                f"RP type names need to stay under {MAX_TYPE_LENGTH} characters.", ephemeral=True
             )
             return
 
         if not rp_type.replace("-", "").replace("_", "").isalnum():
+            # Strip allowed separators first, then check the remainder is alphanumeric.
+            # Keeps type names clean and autocomplete-friendly without being overly strict.
             await interaction.response.send_message(
                 "Keep RP type names to letters, numbers, hyphens, or underscores.",
                 ephemeral=True,
@@ -218,6 +224,8 @@ class RPCommands(commands.Cog):
             "DELETE FROM rp_types WHERE guild_id = ? AND type = ?",
             (interaction.guild_id, rp_type),
         )
+        # The foreign key cascade in rp_schema.sql takes care of deleting all
+        # roleplay_entries rows that reference this type, so we don't need a second query.
         await interaction.response.send_message(
             f"Removed RP type `{rp_type}` and all of its saved entries.",
             ephemeral=True,
@@ -257,6 +265,8 @@ class RPCommands(commands.Cog):
 
         parsed = urlparse(url)
         if parsed.netloc in {"imgur.com", "www.imgur.com"}:
+            # imgur gallery/page URLs don't embed properly in Discord — the image never shows.
+            # i.imgur.com links are the actual image files and work fine.
             await interaction.response.send_message(
                 "Please provide the direct image link (Right-click → Copy image address). "
                 "It should start with `i.imgur.com`, not `imgur.com`.",
@@ -459,6 +469,27 @@ class RPCommands(commands.Cog):
             await interaction.response.send_message("Unknown RP type.", ephemeral=True)
             return
 
+        if not action_text:
+            await interaction.response.send_message("Action text entries can't be blank.", ephemeral=True)
+            return
+
+        if len(action_text) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Keep action text entries under {MAX_TEXT_LENGTH} characters so they stay usable in Discord.",
+                ephemeral=True,
+            )
+            return
+
+        duplicate = await database.fetch_one(
+            "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND action_texts = ?",
+            (interaction.guild_id, rp_type, action_text),
+        )
+        if duplicate is not None:
+            await interaction.response.send_message(
+                "That action text is already saved for this RP type.", ephemeral=True
+            )
+            return
+
         has_user = "{user}" in action_text or "{user_name}" in action_text
         has_target = "{target}" in action_text or "{target_name}" in action_text
 
@@ -476,6 +507,8 @@ class RPCommands(commands.Cog):
                 "- `{user_name}` / `{target_name}`: Uses their display names.\n\n"
                 "Do you want to add it anyway?"
             )
+            # Kick it over to a confirmation view rather than just rejecting outright —
+            # there are legit cases where someone wants a one-sided action text.
             view = ActionTextConfirmView(interaction.user.id, interaction.guild_id, rp_type, action_text)
             await interaction.response.send_message(warning, view=view, ephemeral=True)
         else:
