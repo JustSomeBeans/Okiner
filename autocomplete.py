@@ -28,6 +28,8 @@ async def rp_type_autocomplete(
         return []
 
     pattern = f"%{normalize_rp_type(current)}%"
+    # We normalize current so "HUG" matches the stored "hug" — normalize_rp_type lowercases it.
+    # The %...% pattern means it'll match anywhere in the type name, not just prefixes.
     async with bot.db_pool.acquire() as conn:
         result = await conn.execute(
             """

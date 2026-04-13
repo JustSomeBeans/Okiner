@@ -62,6 +62,8 @@ bot = OkinerBot()
 @bot.command(name="sync")
 @commands.is_owner()
 async def sync(ctx: commands.Context, scope: str = "local") -> None:
+    # Global sync pushes commands to all servers but takes up to an hour to propagate.
+    # Local sync (the default) is instant and great for testing — just run it in your dev server.
     scope = scope.lower()
 
     if scope == "global":

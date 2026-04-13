@@ -6,7 +6,8 @@ from __future__ import annotations
 # Imported by:  bot.py              → set_bot  (called in setup_hook)
 #               views.py            → add_rp_entry
 #               cogs/rp_commands.py → execute_query, fetch_one, fetch_column,
-#                                     rp_type_exists, add_rp_type, add_rp_entry
+#                                     rp_type_exists, add_rp_type, add_rp_entry,
+#                                     add_self_case
 # Imports from: bot.py → OkinerBot  (TYPE_CHECKING only — avoids circular import;
 #                                    runtime reference is injected via set_bot())
 # =============================================================================
@@ -18,6 +19,9 @@ if TYPE_CHECKING:
 
 
 # Module-level reference set by bot.py after the bot is instantiated.
+# We do it this way to avoid a circular import (bot.py imports database.py,
+# so database.py can't import bot.py at module level). set_bot() is called
+# in setup_hook once the pool is ready.
 _bot: "OkinerBot | None" = None
 
 
@@ -36,6 +40,8 @@ def _pool():
 async def execute_query(query: str, params: tuple = ()) -> None:
     """Run a write query and commit it right away."""
     async with _pool().acquire() as conn:
+        # asqlite connections don't inherit PRAGMAs from the pool-level setup,
+        # so we re-enable foreign keys on every acquired connection to be safe.
         await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute(query, params)
         await conn.commit()
@@ -86,4 +92,40 @@ async def add_rp_entry(
     await execute_query(
         "INSERT INTO roleplay_entries (user_id, guild_id, type, url, texts, action_texts) VALUES (?, ?, ?, ?, ?, ?)",
         (user_id, guild_id, rp_type, url, text, action_text),
+    )
+
+
+async def add_self_case(
+    guild_id: int,
+    rp_type: str,
+    text: str | None,
+    action_text: str | None,
+    url: str | None,
+) -> None:
+    """Store a custom self-targeting case, overwriting any existing one."""
+    await execute_query(
+        """
+        INSERT INTO rp_self_cases (guild_id, type, texts, action_texts, url)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, type) DO UPDATE SET
+            texts = excluded.texts,
+            action_texts = excluded.action_texts,
+            url = excluded.url
+        """,
+        (guild_id, rp_type, text, action_text, url),
+    )
+
+async def fetch_self_case(guild_id: int, rp_type: str) -> tuple | None:
+    """Fetch the self targeting ovveride for a speciic type."""
+    return await fetch_one(
+        "SELECT texts, action_texts, url FROM rp_self_cases WHERE guild_id = ? AND type = ?",
+        (guild_id, rp_type),
+    )
+
+
+async def remove_self_case(guild_id: int, rp_type: str) -> None:
+    """Remove the self targeting override for a specific type."""
+    await execute_query(
+        "DELETE FROM rp_self_cases WHERE guild_id = ? AND type = ?",
+        (guild_id, rp_type),
     )
