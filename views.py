@@ -48,6 +48,7 @@ class ActionTextConfirmView(discord.ui.View):
     async def on_timeout(self) -> None:
         # Discord doesn't give us an interaction to respond to here, so we can't edit the message.
         # Disabling all the buttons at least stops them from looking clickable if the message is still visible.
+        # This isn't working currently, I'll come back to it later. For now, the timeout just means the buttons won't do anything if clicked after 60 seconds.
         for item in self.children:
             if isinstance(item, discord.ui.Button):
                 item.disabled = True

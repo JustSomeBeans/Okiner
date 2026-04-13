@@ -9,7 +9,8 @@ from __future__ import annotations
 #               config.py       → MAX_EMBED_DESCRIPTION_LENGTH, MAX_TEXT_LENGTH,
 #                                  MAX_TYPE_LENGTH, MAX_URL_LENGTH
 #               database.py     → execute_query, fetch_one, fetch_column,
-#                                  rp_type_exists, add_rp_type, add_rp_entry
+#                                  rp_type_exists, add_rp_type, add_rp_entry,
+#                                  add_self_case
 #               utils.py        → normalize_rp_type, normalize_image_url,
 #                                  is_valid_image_url, truncate_for_embed,
 #                                  build_list_messages
@@ -108,24 +109,43 @@ class RPCommands(commands.Cog):
             )
             return
 
-        async with self.bot.db_pool.acquire() as conn:
-            text_rows = await conn.execute(
-                "SELECT texts FROM roleplay_entries WHERE guild_id = ? AND type = ? AND texts IS NOT NULL",
-                (interaction.guild_id, rp_type),
-            )
-            texts = [row[0] for row in await text_rows.fetchall()]
+        texts, action_texts, images = [], [], []
+        handled_by_self_case = False
 
-            action_text_rows = await conn.execute(
-                "SELECT action_texts FROM roleplay_entries WHERE guild_id = ? AND type = ? AND action_texts IS NOT NULL",
+        if interaction.user == target:
+            self_case = await database.fetch_one(
+                "SELECT texts, action_texts, url FROM rp_self_cases WHERE guild_id = ? AND type = ?",
                 (interaction.guild_id, rp_type),
             )
-            action_texts = [row[0] for row in await action_text_rows.fetchall()]
+            if self_case is not None:
+                handled_by_self_case = True
+                self_text, self_action, self_url = self_case
+                if self_text:
+                    texts.append(self_text)
+                if self_action:
+                    action_texts.append(self_action)
+                if self_url:
+                    images.append(self_url)
 
-            image_rows = await conn.execute(
-                "SELECT url FROM roleplay_entries WHERE guild_id = ? AND type = ? AND url IS NOT NULL",
-                (interaction.guild_id, rp_type),
-            )
-            images = [row[0] for row in await image_rows.fetchall()]
+        if not handled_by_self_case:
+            async with self.bot.db_pool.acquire() as conn:
+                text_rows = await conn.execute(
+                    "SELECT texts FROM roleplay_entries WHERE guild_id = ? AND type = ? AND texts IS NOT NULL",
+                    (interaction.guild_id, rp_type),
+                )
+                texts = [row[0] for row in await text_rows.fetchall()]
+
+                action_text_rows = await conn.execute(
+                    "SELECT action_texts FROM roleplay_entries WHERE guild_id = ? AND type = ? AND action_texts IS NOT NULL",
+                    (interaction.guild_id, rp_type),
+                )
+                action_texts = [row[0] for row in await action_text_rows.fetchall()]
+
+                image_rows = await conn.execute(
+                    "SELECT url FROM roleplay_entries WHERE guild_id = ? AND type = ? AND url IS NOT NULL",
+                    (interaction.guild_id, rp_type),
+                )
+                images = [row[0] for row in await image_rows.fetchall()]
 
         if action_texts:
             # apply_placeholders handles all four {user}/{target}/{user_name}/{target_name} substitutions
@@ -167,6 +187,73 @@ class RPCommands(commands.Cog):
                 await interaction.followup.send(embed=fallback_embed)
             else:
                 await interaction.response.send_message(embed=fallback_embed)
+
+    # ------------------------------------------------------------------ #
+    #  Self Case Management                                              #
+    # ------------------------------------------------------------------ #
+
+    @app_commands.command(name="addselfcase", description="Set a custom response for when a user targets themselves.")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_messages=True)
+    @moderator_only()
+    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
+    async def add_self_case(
+        self,
+        interaction: discord.Interaction,
+        rp_type: str,
+        text: str | None = None,
+        action_text: str | None = None,
+        image: str | None = None,
+    ) -> None:
+        rp_type = normalize_rp_type(rp_type)
+
+        if not await database.rp_type_exists(interaction.guild_id, rp_type):
+            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
+            return
+
+        if not text and not action_text and not image:
+            await interaction.response.send_message(
+                "You must provide at least one of: text, action_text, or image.", ephemeral=True
+            )
+            return
+
+        if text and len(text) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Keep text under {MAX_TEXT_LENGTH} characters.", ephemeral=True
+            )
+            return
+
+        if action_text and len(action_text) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Keep action text under {MAX_TEXT_LENGTH} characters.", ephemeral=True
+            )
+            return
+
+        if image:
+            image = normalize_image_url(image)
+            parsed = urlparse(image)
+            if parsed.netloc in {"imgur.com", "www.imgur.com"}:
+                await interaction.response.send_message(
+                    "Please provide the direct image link (Right-click → Copy image address). "
+                    "It should start with `i.imgur.com`, not `imgur.com`.",
+                    ephemeral=True,
+                )
+                return
+
+            if not is_valid_image_url(image):
+                await interaction.response.send_message(
+                    "That doesn't look like a valid URL.", ephemeral=True
+                )
+                return
+
+            if len(image) > MAX_URL_LENGTH:
+                await interaction.response.send_message(
+                    "That URL is too long.", ephemeral=True
+                )
+                return
+
+        await database.add_self_case(interaction.guild_id, rp_type, text, action_text, image)
+        await interaction.response.send_message(f"Set self case override for `{rp_type}`.", ephemeral=True)
 
     # ------------------------------------------------------------------ #
     #  Type management                                                   #

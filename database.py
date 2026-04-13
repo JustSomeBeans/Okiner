@@ -6,7 +6,8 @@ from __future__ import annotations
 # Imported by:  bot.py              → set_bot  (called in setup_hook)
 #               views.py            → add_rp_entry
 #               cogs/rp_commands.py → execute_query, fetch_one, fetch_column,
-#                                     rp_type_exists, add_rp_type, add_rp_entry
+#                                     rp_type_exists, add_rp_type, add_rp_entry,
+#                                     add_self_case
 # Imports from: bot.py → OkinerBot  (TYPE_CHECKING only — avoids circular import;
 #                                    runtime reference is injected via set_bot())
 # =============================================================================
@@ -91,4 +92,25 @@ async def add_rp_entry(
     await execute_query(
         "INSERT INTO roleplay_entries (user_id, guild_id, type, url, texts, action_texts) VALUES (?, ?, ?, ?, ?, ?)",
         (user_id, guild_id, rp_type, url, text, action_text),
+    )
+
+
+async def add_self_case(
+    guild_id: int,
+    rp_type: str,
+    text: str | None,
+    action_text: str | None,
+    url: str | None,
+) -> None:
+    """Store a custom self-targeting case, overwriting any existing one."""
+    await execute_query(
+        """
+        INSERT INTO rp_self_cases (guild_id, type, texts, action_texts, url)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, type) DO UPDATE SET
+            texts = excluded.texts,
+            action_texts = excluded.action_texts,
+            url = excluded.url
+        """,
+        (guild_id, rp_type, text, action_text, url),
     )
