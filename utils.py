@@ -4,19 +4,29 @@ from __future__ import annotations
 # utils.py — Pure, stateless helper functions
 # -----------------------------------------------------------------------------
 # Imported by:  autocomplete.py     → normalize_rp_type
-#               cogs/rp_commands.py → normalize_rp_type, normalize_image_url,
-#                                     is_valid_image_url, truncate_for_embed,
-#                                     build_list_messages
-# Imports from: config.py → MAX_MESSAGE_LENGTH
-#               discord   → discord.abc.User, discord.Member  (apply_placeholders)
-#               urllib    → urlparse  (is_valid_image_url)
+#               cogs/rp_commands.py → PlaceholderTarget, apply_placeholders,
+#                                     build_list_messages, is_valid_image_url,
+#                                     normalize_image_url, normalize_rp_type,
+#                                     truncate_for_embed
+# Imports from: config.py           → MAX_MESSAGE_LENGTH
+#               discord             → discord.abc.User
+#               dataclasses         → dataclass
+#               urllib.parse        → urlparse
 # =============================================================================
 
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import discord
 
 from config import MAX_MESSAGE_LENGTH
+
+
+@dataclass(slots=True)
+class PlaceholderTarget:
+    """Tiny helper so placeholder filling works for members and plain text targets."""
+    mention: str
+    display_name: str
 
 
 def normalize_rp_type(raw_value: str) -> str:
@@ -38,8 +48,12 @@ def is_valid_image_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def apply_placeholders(template: str, actor: discord.abc.User, target: discord.Member) -> str:
-    """Fill the simple placeholders we support inside RP text."""
+def apply_placeholders(
+    template: str,
+    actor: discord.abc.User,
+    target: PlaceholderTarget,
+) -> str:
+    """Fill supported placeholders inside RP text."""
     return (
         template.replace("{user}", actor.mention)
         .replace("{target}", target.mention)
@@ -49,7 +63,7 @@ def apply_placeholders(template: str, actor: discord.abc.User, target: discord.M
 
 
 def truncate_for_embed(text: str, limit: int) -> str:
-    """Trim text to a Discord-safe embed length without chopping mid-error."""
+    """Trim text to a Discord-safe embed length."""
     if len(text) <= limit:
         return text
     return f"{text[: limit - 3]}..."

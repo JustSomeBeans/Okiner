@@ -74,7 +74,9 @@ async def sync(ctx: commands.Context, scope: str = "local") -> None:
         return
 
     synced = await bot.tree.sync(guild=ctx.guild)
-    await ctx.reply(f"Local sync finished for this server. {len(synced)} commands updated.")
+    await ctx.reply(
+        f"Local sync finished for this server. {len(synced)} commands updated."
+    )
 
 
 @sync.error

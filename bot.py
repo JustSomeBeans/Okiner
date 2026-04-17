@@ -74,9 +74,60 @@ class OkinerBot(commands.Bot):
         async with self.db_pool.acquire() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
             await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-            await conn.commit()
+            table_info = await conn.execute("PRAGMA table_info(roleplay_entries)")
+            columns = {row[1] for row in await table_info.fetchall()}
+            if "case_type" not in columns:
+                await conn.executescript(
+                    """
+                    ALTER TABLE roleplay_entries RENAME TO roleplay_entries_legacy;
 
+                    CREATE TABLE roleplay_entries (
+                        user_id INTEGER NOT NULL,
+                        guild_id INTEGER NOT NULL,
+                        type TEXT NOT NULL,
+                        case_type TEXT NOT NULL DEFAULT 'standard',
+                        url TEXT,
+                        texts TEXT,
+                        action_texts TEXT,
+                        PRIMARY KEY (user_id, guild_id, type, case_type, url, texts, action_texts),
+                        FOREIGN KEY (guild_id, type)
+                            REFERENCES rp_types(guild_id, type)
+                            ON DELETE CASCADE
+                    );
+
+                    INSERT INTO roleplay_entries (user_id, guild_id, type, case_type, url, texts, action_texts)
+                    SELECT user_id, guild_id, type, 'standard', url, texts, action_texts
+                    FROM roleplay_entries_legacy;
+
+                    DROP TABLE roleplay_entries_legacy;
+                    """
+                )
+
+            legacy_self = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='rp_self_cases'"
+            )
+            if await legacy_self.fetchone():
+                await conn.executescript(
+                    """
+                    INSERT OR IGNORE INTO roleplay_entries
+                        (user_id, guild_id, type, case_type, url, texts, action_texts)
+                    SELECT
+                        0, -- Placeholder for missing user_id in legacy table
+                        guild_id,
+                        type,
+                        'selfcase',
+                        url,
+                        texts,
+                        action_texts
+                    FROM rp_self_cases;
+
+                    DROP TABLE rp_self_cases;
+                    """
+                )
+            await conn.commit()
+            
         await self.load_extension("cogs.rp_commands")
+
 
     async def close(self) -> None:
         if self.db_pool is not None:
@@ -84,7 +135,11 @@ class OkinerBot(commands.Bot):
         await super().close()
 
     async def on_ready(self) -> None:
-        logging.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "unknown")
+        logging.info(
+            "Logged in as %s (ID: %s)",
+            self.user,
+            self.user.id if self.user else "unknown",
+        )
 
         if APPLICATION_ID:
             logging.info("Bot invite URL: %s", build_invite_url(APPLICATION_ID))

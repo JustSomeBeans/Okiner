@@ -78,12 +78,25 @@ async def add_rp_entry(
     guild_id: int,
     rp_type: str,
     *,
+    case_type: str = "standard",
     text: str | None = None,
     action_text: str | None = None,
     url: str | None = None,
 ) -> None:
     """Store an entry tied to a server RP type."""
     await execute_query(
-        "INSERT INTO roleplay_entries (user_id, guild_id, type, url, texts, action_texts) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, guild_id, rp_type, url, text, action_text),
+        """
+        INSERT OR IGNORE INTO roleplay_entries
+            (user_id, guild_id, type, case_type, url, texts, action_texts)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        # Previously the application pre checked for duplications in _add_text_entry,
+        # _add_action_entry, and add_image, so under normal useage, you never reach
+        # add_rp_entry with a duplicate, but there's a gap:
+        # AddTextConfirmedView.confirm calls add_rp_entry directly with no duplicate check.
+        # A user can trigger the warning, wait, then somhow submit a duplicate through
+        # the confirm button. Rare, but not impossible. 
+        # We switch to INSERT OR IGNORE and remove the false sense of safety. 
+        # Low overhead, and saves a future headache across the whole database.
+        (user_id, guild_id, rp_type, case_type, url, text, action_text),
     )

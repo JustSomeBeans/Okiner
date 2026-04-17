@@ -15,6 +15,7 @@ from discord import app_commands
 
 def moderator_only() -> app_commands.Check:
     """Restrict management commands to members with the Manage Messages permission."""
+
     async def predicate(interaction: discord.Interaction) -> bool:
         if interaction.guild is None:
             raise app_commands.NoPrivateMessage()
