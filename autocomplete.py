@@ -74,7 +74,17 @@ async def rp_target_autocomplete(
             continue
         members.append(member)
 
-    members.sort(key=lambda member: (member.display_name.lower(), member.name.lower()))
+    members.sort(
+        key=lambda member: (
+            not (
+                needle
+                and needle in member.display_name.lower()
+                and needle in member.name.lower()
+            ),
+            member.display_name.lower(),
+            member.name.lower(),
+        )
+    )
     for member in members[: 25 - len(choices)]:
         label = member.display_name
         if member.name != member.display_name:

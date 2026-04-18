@@ -134,7 +134,16 @@ class RPCommands(commands.Cog):
             if lowered in m.display_name.lower() or lowered in m.name.lower()
         ]
         if partial:
-            partial.sort(key=lambda m: (m.display_name.lower(), m.name.lower()))
+            partial.sort(
+                key=lambda m: (
+                    not (
+                        lowered in m.display_name.lower()
+                        and lowered in m.name.lower()
+                    ),
+                    m.display_name.lower(),
+                    m.name.lower(),
+                )
+            )
             return partial[0]
         return None
 
