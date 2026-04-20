@@ -84,48 +84,25 @@ async def add_rp_entry(
     guild_id: int,
     rp_type: str,
     *,
+    case_type: str = "standard",
     text: str | None = None,
     action_text: str | None = None,
     url: str | None = None,
 ) -> None:
     """Store an entry tied to a server RP type."""
     await execute_query(
-        "INSERT INTO roleplay_entries (user_id, guild_id, type, url, texts, action_texts) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, guild_id, rp_type, url, text, action_text),
-    )
-
-
-async def add_self_case(
-    guild_id: int,
-    rp_type: str,
-    text: str | None,
-    action_text: str | None,
-    url: str | None,
-) -> None:
-    """Store a custom self-targeting case, overwriting any existing one."""
-    await execute_query(
         """
-        INSERT INTO rp_self_cases (guild_id, type, texts, action_texts, url)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(guild_id, type) DO UPDATE SET
-            texts = excluded.texts,
-            action_texts = excluded.action_texts,
-            url = excluded.url
+        INSERT OR IGNORE INTO roleplay_entries
+            (user_id, guild_id, type, case_type, url, texts, action_texts)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (guild_id, rp_type, text, action_text, url),
-    )
-
-async def fetch_self_case(guild_id: int, rp_type: str) -> tuple | None:
-    """Fetch the self targeting ovveride for a speciic type."""
-    return await fetch_one(
-        "SELECT texts, action_texts, url FROM rp_self_cases WHERE guild_id = ? AND type = ?",
-        (guild_id, rp_type),
-    )
-
-
-async def remove_self_case(guild_id: int, rp_type: str) -> None:
-    """Remove the self targeting override for a specific type."""
-    await execute_query(
-        "DELETE FROM rp_self_cases WHERE guild_id = ? AND type = ?",
-        (guild_id, rp_type),
+        # Previously the application pre checked for duplications in _add_text_entry,
+        # _add_action_entry, and add_image, so under normal useage, you never reach
+        # add_rp_entry with a duplicate, but there's a gap:
+        # AddTextConfirmedView.confirm calls add_rp_entry directly with no duplicate check.
+        # A user can trigger the warning, wait, then somhow submit a duplicate through
+        # the confirm button. Rare, but not impossible. 
+        # We switch to INSERT OR IGNORE and remove the false sense of safety. 
+        # Low overhead, and saves a future headache across the whole database.
+        (user_id, guild_id, rp_type, case_type, url, text, action_text),
     )

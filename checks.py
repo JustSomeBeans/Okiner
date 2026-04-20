@@ -14,12 +14,8 @@ from discord import app_commands
 
 
 def moderator_only() -> app_commands.Check:
-    """Restrict management commands to members with the Manage Messages permission.
+    """Restrict management commands to members with the Manage Messages permission."""
 
-    This is used alongside @app_commands.default_permissions() on every mod command.
-    default_permissions controls Discord's UI visibility but can be overridden by server
-    admins — this check is the actual gate that runs at command invocation time.
-    """
     async def predicate(interaction: discord.Interaction) -> bool:
         if interaction.guild is None:
             raise app_commands.NoPrivateMessage()

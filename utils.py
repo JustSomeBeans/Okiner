@@ -4,14 +4,17 @@ from __future__ import annotations
 # utils.py — Pure, stateless helper functions
 # -----------------------------------------------------------------------------
 # Imported by:  autocomplete.py     → normalize_rp_type
-#               cogs/rp_commands.py → normalize_rp_type, normalize_image_url,
-#                                     is_valid_image_url, truncate_for_embed,
-#                                     build_list_messages
-# Imports from: config.py → MAX_MESSAGE_LENGTH
-#               discord   → discord.abc.User, discord.Member  (apply_placeholders)
-#               urllib    → urlparse  (is_valid_image_url)
+#               cogs/rp_commands.py → PlaceholderTarget, apply_placeholders,
+#                                     build_list_messages, is_valid_image_url,
+#                                     normalize_image_url, normalize_rp_type,
+#                                     truncate_for_embed
+# Imports from: config.py           → MAX_MESSAGE_LENGTH
+#               discord             → discord.abc.User
+#               dataclasses         → dataclass
+#               urllib.parse        → urlparse
 # =============================================================================
 
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import discord
@@ -19,31 +22,25 @@ import discord
 from config import MAX_MESSAGE_LENGTH
 
 
-def normalize_rp_type(raw_value: str) -> str:
-    """Keep RP type names consistent so autocomplete and lookups stay predictable.
+@dataclass(slots=True)
+class PlaceholderTarget:
+    """Tiny helper so placeholder filling works for members and plain text targets."""
+    mention: str
+    display_name: str
 
-    Types are stored lowercase, so we normalize on the way in and on every lookup.
-    If you ever change this, make sure autocomplete.py and the DB queries stay in sync.
-    """
+
+def normalize_rp_type(raw_value: str) -> str:
+    """Keep RP type names consistent so autocomplete and lookups stay predictable."""
     return raw_value.strip().lower()
 
 
 def normalize_image_url(url: str) -> str:
-    """Clean up pasted image URLs before we validate or store them.
-
-    Discord wraps URLs in angle brackets when you paste them with Shift+Enter
-    or in certain embed contexts, so we strip those off first.
-    """
+    """Clean up pasted image URLs before we validate or store them."""
     return url.strip().strip("<>")
 
 
 def is_valid_image_url(url: str) -> bool:
-    """Do a lightweight URL sanity check before storing links.
-
-    We're not fetching the URL to verify it's actually an image — that would
-    be slow and leak the bot's IP. This just makes sure it's a real-looking
-    http/https URL with a host. Discord will handle the actual embed validation.
-    """
+    """Do a lightweight URL sanity check before storing links."""
     if not url or any(character.isspace() for character in url):
         return False
 
@@ -51,8 +48,12 @@ def is_valid_image_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def apply_placeholders(template: str, actor: discord.abc.User, target: discord.Member) -> str:
-    """Fill the simple placeholders we support inside RP text."""
+def apply_placeholders(
+    template: str,
+    actor: discord.abc.User,
+    target: PlaceholderTarget,
+) -> str:
+    """Fill supported placeholders inside RP text."""
     return (
         template.replace("{user}", actor.mention)
         .replace("{target}", target.mention)
@@ -62,19 +63,14 @@ def apply_placeholders(template: str, actor: discord.abc.User, target: discord.M
 
 
 def truncate_for_embed(text: str, limit: int) -> str:
-    """Trim text to a Discord-safe embed length without chopping mid-error."""
+    """Trim text to a Discord-safe embed length."""
     if len(text) <= limit:
         return text
     return f"{text[: limit - 3]}..."
 
 
 def build_list_messages(title: str, entries: list[str]) -> list[str]:
-    """Split long list output into safe message-sized chunks.
-
-    Discord's message limit is 2000 chars; we use MAX_MESSAGE_LENGTH (1900) to leave
-    some headroom. Each chunk restarts with the title so it's clear what you're looking at
-    if it ends up spanning multiple messages.
-    """
+    """Split long list output into safe message-sized chunks."""
     if not entries:
         return [f"{title}\nNothing saved yet."]
 
@@ -82,7 +78,6 @@ def build_list_messages(title: str, entries: list[str]) -> list[str]:
     current_chunk = title
 
     for index, entry in enumerate(entries, start=1):
-        # Backticks inside code blocks break the formatting, so we swap them out.
         safe_entry = entry.replace("```", "'''")
         if len(safe_entry) > 1200:
             safe_entry = f"{safe_entry[:1197]}..."
