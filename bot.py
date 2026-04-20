@@ -25,6 +25,7 @@ import database
 from config import DB_PATH, SCHEMA_PATH
 
 APPLICATION_ID = os.getenv("DISCORD_APPLICATION_ID")
+# APPLICATION_ID is optional — without it the bot still works, it just won't log an invite URL at startup.
 
 intents = discord.Intents.default()
 intents.presences = True
@@ -72,7 +73,12 @@ class OkinerBot(commands.Bot):
         database.set_bot(self)
 
         async with self.db_pool.acquire() as conn:
+            # Enable foreign key enforcement — SQLite has it off by default.
+            # We also do this per-connection in execute_query, but doing it here
+            # ensures the schema creation itself (with the FK definition) is consistent.
             await conn.execute("PRAGMA foreign_keys = ON")
+            # executescript runs the full SQL file — safe to call every startup
+            # because every table uses CREATE TABLE IF NOT EXISTS.
             await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
             table_info = await conn.execute("PRAGMA table_info(roleplay_entries)")
             columns = {row[1] for row in await table_info.fetchall()}

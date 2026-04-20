@@ -6,7 +6,8 @@ from __future__ import annotations
 # Imported by:  bot.py              → set_bot  (called in setup_hook)
 #               views.py            → add_rp_entry
 #               cogs/rp_commands.py → execute_query, fetch_one, fetch_column,
-#                                     rp_type_exists, add_rp_type, add_rp_entry
+#                                     rp_type_exists, add_rp_type, add_rp_entry,
+#                                     add_self_case
 # Imports from: bot.py → OkinerBot  (TYPE_CHECKING only — avoids circular import;
 #                                    runtime reference is injected via set_bot())
 # =============================================================================
@@ -18,6 +19,9 @@ if TYPE_CHECKING:
 
 
 # Module-level reference set by bot.py after the bot is instantiated.
+# We do it this way to avoid a circular import (bot.py imports database.py,
+# so database.py can't import bot.py at module level). set_bot() is called
+# in setup_hook once the pool is ready.
 _bot: "OkinerBot | None" = None
 
 
@@ -36,6 +40,8 @@ def _pool():
 async def execute_query(query: str, params: tuple = ()) -> None:
     """Run a write query and commit it right away."""
     async with _pool().acquire() as conn:
+        # asqlite connections don't inherit PRAGMAs from the pool-level setup,
+        # so we re-enable foreign keys on every acquired connection to be safe.
         await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute(query, params)
         await conn.commit()

@@ -20,6 +20,8 @@ def moderator_only() -> app_commands.Check:
         if interaction.guild is None:
             raise app_commands.NoPrivateMessage()
 
+        # guild_permissions is only available on Member, not User (e.g. in DMs).
+        # getattr with a default lets us handle both without an isinstance check.
         permissions = getattr(interaction.user, "guild_permissions", None)
         if permissions and permissions.manage_messages:
             return True
