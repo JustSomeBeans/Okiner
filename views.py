@@ -10,6 +10,7 @@ from __future__ import annotations
 # =============================================================================
 
 import discord
+from discord.ext import commands
 
 from database import add_rp_entry
 
@@ -82,3 +83,47 @@ class ActionTextConfirmView(discord.ui.View):
         await interaction.response.edit_message(
             content="Action text addition cancelled.", view=None
         )
+
+class MarriageContainer(discord.ui.Container):    
+    def __init__(self, interaction: discord.Interaction, target: discord.User, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        text = discord.ui.TextDisplay(f"Hey {target.mention}! {interaction.user.mention} wants to marry you...!")
+        action_row = discord.ui.ActionRow()
+        accept_button = discord.ui.Button(label="Accept", style=discord.ButtonStyle.green, emoji="💍")
+        reject_button = discord.ui.Button(label="Reject", style=discord.ButtonStyle.gray, emoji="❌")
+        action_row.add_item(accept_button)
+        action_row.add_item(reject_button)
+
+        accept_button.callback = self.accept_callback
+        reject_button.callback = self.reject_callback
+
+        self.add_item(text)
+        self.add_item(action_row)
+
+    async def accept_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Accepted!")
+
+    async def reject_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Rejected!")
+
+class MarriageConfirmView(discord.ui.LayoutView):
+    """Marriage confirmation view when a user requests for marriage (so they don't get raped)"""
+    def __init__(self, interaction: discord.Interaction, target: discord.User) -> None:
+        super().__init__()
+        self.target = target
+
+        self.container = container = MarriageContainer(interaction=interaction, target=target, accent_color=0x7289da)
+        self.add_item(container)
+    
+    async def on_timeout(self) -> None:
+        for child in self.container.children:
+            child.disabled = True
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.target.id:
+            await interaction.response.send_message(
+                "Only the person who is being proposed to can confirm.",
+                ephemeral=True,
+            )
+            return False
+        return True

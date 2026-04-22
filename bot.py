@@ -133,6 +133,7 @@ class OkinerBot(commands.Bot):
             await conn.commit()
             
         await self.load_extension("cogs.rp_commands")
+        await self.load_extension("cogs.family_commands")
 
 
     async def close(self) -> None:
