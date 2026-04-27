@@ -38,13 +38,17 @@ from discord import app_commands
 from discord.ext import commands
 
 import database
-from autocomplete import EVERYONE_TARGET, rp_target_autocomplete, rp_type_autocomplete
+from autocomplete import rp_target_autocomplete, rp_type_autocomplete
 from checks import moderator_only
 from config import (
+    EVERYONE_TARGET,
     MAX_EMBED_DESCRIPTION_LENGTH,
     MAX_TEXT_LENGTH,
     MAX_TYPE_LENGTH,
     MAX_URL_LENGTH,
+    NULL_CASE,
+    SELF_CASE,
+    STANDARD_CASE,
 )
 from utils import (
     PlaceholderTarget,
@@ -55,12 +59,9 @@ from utils import (
     normalize_rp_type,
     truncate_for_embed,
 )
-from views import ActionTextConfirmView
+from views import ActionTextConfirmView, RPBackView
 
 TARGET_MENTION_RE = re.compile(r"<@!?(\d+)>")
-STANDARD_CASE = "standard"
-SELF_CASE = "selfcase"
-NULL_CASE = "nullcase"
 ALLOWED_COLUMNS = {"texts", "action_texts"} # guard against SQL injection in _fetch_case_entries
 
 
@@ -149,22 +150,23 @@ class RPCommands(commands.Cog):
 
     async def _resolve_target(
         self, interaction: discord.Interaction, target: str | None
-    ) -> tuple[PlaceholderTarget, str] | None:
+    ) -> tuple[PlaceholderTarget, str, int | None] | None:
         """Turn raw target input into placeholder data plus the matching case."""
         if target is None or not target.strip():
-            return PlaceholderTarget("", ""), NULL_CASE
+            return PlaceholderTarget("", ""), NULL_CASE, None
         guild = interaction.guild
         if guild is None:
             return None
         raw_target = target.strip()
         if raw_target.lower().lstrip("@") == EVERYONE_TARGET:
-            return PlaceholderTarget(EVERYONE_TARGET, EVERYONE_TARGET), STANDARD_CASE
+            return PlaceholderTarget(EVERYONE_TARGET, EVERYONE_TARGET), STANDARD_CASE, None
         member = self._find_member(guild, raw_target)
         if member is None:
             raise RuntimeError("_resolve_target called outside of a guild context")
         return (
             PlaceholderTarget(member.mention, member.display_name),
             SELF_CASE if member.id == interaction.user.id else STANDARD_CASE,
+            member.id,
         )
     
     async def _fetch_case_entries(
@@ -195,6 +197,104 @@ class RPCommands(commands.Cog):
             (guild_id, rp_type, STANDARD_CASE),
         )
         return [row[0] for row in await result.fetchall()]
+
+    async def _execute_rp(
+        self,
+        interaction: discord.Interaction,
+        rp_type: str,
+        target_info: PlaceholderTarget,
+        case_type: str,
+        *,
+        view: discord.ui.View | None = None,
+    ) -> discord.Embed | None:
+        """Run the shared RP pipeline, send the embed, and return the sent embed."""
+        send_view = view if view is not None else discord.utils.MISSING
+        async with self.bot.db_pool.acquire() as conn:
+            if case_type == NULL_CASE:
+                null_text_rows = await conn.execute(
+                    "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND texts IS NOT NULL LIMIT 1",
+                    (interaction.guild_id, rp_type, NULL_CASE),
+                )
+                null_action_rows = await conn.execute(
+                    "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND action_texts IS NOT NULL LIMIT 1",
+                    (interaction.guild_id, rp_type, NULL_CASE),
+                )
+                has_null_text = await null_text_rows.fetchone()
+                has_null_action_text = await null_action_rows.fetchone()
+                if has_null_text is None and has_null_action_text is None:
+                    await interaction.response.send_message(
+                        f"`{rp_type}` doesn't work without a target.",
+                        ephemeral=True,
+                    )
+                    return None
+            texts = await self._fetch_case_entries(
+                conn, interaction.guild_id, rp_type, "texts", case_type
+            )
+            action_texts = await self._fetch_case_entries(
+                conn, interaction.guild_id, rp_type, "action_texts", case_type
+            )
+            # Images are alwayss drawn from the standard pool. They're type level flavor,
+            # not case specific. This is intentional.
+            images = await self._fetch_standard_images(
+                conn, interaction.guild_id, rp_type
+            )
+        raw_action = (
+            apply_placeholders(
+                random.choice(action_texts), interaction.user, target_info
+            ).strip()
+            if action_texts
+            else self._default_action(interaction.user, target_info, case_type)
+        )
+        action_line = truncate_for_embed(
+            f"**{raw_action}**", MAX_EMBED_DESCRIPTION_LENGTH
+        )
+        if texts:
+            raw_text = apply_placeholders(
+                random.choice(texts), interaction.user, target_info
+            ).strip()
+            rp_line = truncate_for_embed(
+                raw_text, MAX_EMBED_DESCRIPTION_LENGTH - len(action_line) - 2
+            )
+            description = f"{action_line}\n{rp_line}" if rp_line else action_line
+        else:
+            description = action_line
+        description = truncate_for_embed(description, MAX_EMBED_DESCRIPTION_LENGTH)
+        valid_images = [
+            normalize_image_url(url)
+            for url in images
+            if is_valid_image_url(normalize_image_url(url))
+        ]
+        image_url = random.choice(valid_images) if valid_images else None
+        embed = discord.Embed(description=description, color=discord.Color.blurple())
+        if image_url:
+            embed.set_image(url=image_url)
+        try:
+            await interaction.response.send_message(
+                embed=embed,
+                view=send_view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return embed
+        except discord.HTTPException:
+            logging.warning("RP message send failed; retrying without image.", exc_info=True)
+            embed.set_image(url=None)  # strip the image from the same object
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send(
+                        embed=embed,
+                        view=send_view,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                else:
+                    await interaction.response.send_message(
+                        embed=embed,
+                        view=send_view,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                return embed
+            except discord.HTTPException:
+                logging.error("RP fallback send also failed.", exc_info=True)
+                return None
 
     # ------------------------------------------------------------------ #
     #  Text helpers                                                      #
@@ -460,78 +560,30 @@ class RPCommands(commands.Cog):
                 ephemeral=True,
             )
             return
-        target_info, case_type = resolved_target
-        async with self.bot.db_pool.acquire() as conn:
-            if case_type == NULL_CASE:
-                null_text_rows = await conn.execute(
-                    "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND texts IS NOT NULL LIMIT 1",
-                    (interaction.guild_id, rp_type, NULL_CASE),
-                )
-                null_action_rows = await conn.execute(
-                    "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND action_texts IS NOT NULL LIMIT 1",
-                    (interaction.guild_id, rp_type, NULL_CASE),
-                )
-                has_null_text = await null_text_rows.fetchone()
-                has_null_action_text = await null_action_rows.fetchone()
-                if has_null_text is None and has_null_action_text is None:
-                    await interaction.response.send_message(
-                        f"`{rp_type}` doesn't work without a target.",
-                        ephemeral=True,
-                    )
-                    return
-            texts = await self._fetch_case_entries(
-                conn, interaction.guild_id, rp_type, "texts", case_type
+        target_info, case_type, resolved_target_id = resolved_target
+        show_back_button = case_type != SELF_CASE and case_type != NULL_CASE
+        view = (
+            RPBackView(
+                cog=self,
+                rp_type=rp_type,
+                original_actor_id=interaction.user.id,
+                target_id=resolved_target_id,
+                guild_id=interaction.guild_id,
             )
-            action_texts = await self._fetch_case_entries(
-                conn, interaction.guild_id, rp_type, "action_texts", case_type
-            )
-            # Images are alwayss drawn from the standard pool. They're type level flavor,
-            # not case specific. This is intentional.
-            images = await self._fetch_standard_images(
-                conn, interaction.guild_id, rp_type
-            )
-        raw_action = (
-            apply_placeholders(
-                random.choice(action_texts), interaction.user, target_info
-            ).strip()
-            if action_texts
-            else self._default_action(interaction.user, target_info, case_type)
+            if show_back_button
+            else None
         )
-        action_line = truncate_for_embed(
-            f"**{raw_action}**", MAX_EMBED_DESCRIPTION_LENGTH
+        embed = await self._execute_rp(
+            interaction,
+            rp_type,
+            target_info,
+            case_type,
+            view=view,
         )
-        if texts:
-            raw_text = apply_placeholders(
-                random.choice(texts), interaction.user, target_info
-            ).strip()
-            rp_line = truncate_for_embed(
-                raw_text, MAX_EMBED_DESCRIPTION_LENGTH - len(action_line) - 2
-            )
-            description = f"{action_line}\n{rp_line}" if rp_line else action_line
-        else:
-            description = action_line
-        description = truncate_for_embed(description, MAX_EMBED_DESCRIPTION_LENGTH)
-        valid_images = [
-            normalize_image_url(url)
-            for url in images
-            if is_valid_image_url(normalize_image_url(url))
-        ]
-        image_url = random.choice(valid_images) if valid_images else None
-        embed = discord.Embed(description=description, color=discord.Color.blurple())
-        if image_url:
-            embed.set_image(url=image_url)
-        try:
-            await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-        except discord.HTTPException:
-            logging.warning("RP message send failed; retrying without image.", exc_info=True)
-            embed.set_image(url=None)  # strip the image from the same object
-            try:
-                if interaction.response.is_done():
-                    await interaction.followup.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-                else:
-                    await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-            except discord.HTTPException:
-                logging.error("RP fallback send also failed.", exc_info=True)
+        if embed is None:
+            return
+        if view is not None:
+            view.message = await interaction.original_response()
 
     # ------------------------------------------------------------------ #
     #  Type management                                                   #
