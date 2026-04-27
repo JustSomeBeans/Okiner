@@ -208,6 +208,7 @@ class RPCommands(commands.Cog):
         view: discord.ui.View | None = None,
     ) -> discord.Embed | None:
         """Run the shared RP pipeline, send the embed, and return the sent embed."""
+        send_view = view if view is not None else discord.utils.MISSING
         async with self.bot.db_pool.acquire() as conn:
             if case_type == NULL_CASE:
                 null_text_rows = await conn.execute(
@@ -270,7 +271,7 @@ class RPCommands(commands.Cog):
         try:
             await interaction.response.send_message(
                 embed=embed,
-                view=view,
+                view=send_view,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return embed
@@ -281,13 +282,13 @@ class RPCommands(commands.Cog):
                 if interaction.response.is_done():
                     await interaction.followup.send(
                         embed=embed,
-                        view=view,
+                        view=send_view,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 else:
                     await interaction.response.send_message(
                         embed=embed,
-                        view=view,
+                        view=send_view,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 return embed
