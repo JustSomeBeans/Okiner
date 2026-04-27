@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 # =============================================================================
 # views.py — Discord UI components (discord.ui.View subclasses)
 # -----------------------------------------------------------------------------
@@ -11,7 +13,12 @@ from __future__ import annotations
 
 import discord
 
+from config import EVERYONE_TARGET, SELF_CASE, STANDARD_CASE
 from database import add_rp_entry
+from utils import PlaceholderTarget
+
+if TYPE_CHECKING:
+    from cogs.rp_commands import RPCommands
 
 
 class ActionTextConfirmView(discord.ui.View):
@@ -54,7 +61,7 @@ class ActionTextConfirmView(discord.ui.View):
                     content="Confirmation timed out. Run the command again if you still want to add it.",
                     view=self,
                 )
-            except discord.HTTPCException:
+            except discord.HTTPException:
                 pass # Most likely message deleted or channel gone - really not worth crashing over.
 
     @discord.ui.button(label="Yes, Add It", style=discord.ButtonStyle.green)
@@ -82,3 +89,94 @@ class ActionTextConfirmView(discord.ui.View):
         await interaction.response.edit_message(
             content="Action text addition cancelled.", view=None
         )
+
+
+class RPBackView(discord.ui.View):
+    """Button that lets the original RP target send the same interaction back."""
+
+    def __init__(
+        self,
+        cog: "RPCommands",
+        rp_type: str,
+        original_actor_id: int,
+        target_id: int | None,
+        guild_id: int,
+    ) -> None:
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.rp_type = rp_type
+        self.original_actor_id = original_actor_id
+        self.target_id = target_id
+        self.guild_id = guild_id
+        self.back.label = f"{rp_type} back"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.target_id is None:
+            return True
+
+        if interaction.user.id != self.target_id:
+            await interaction.response.send_message(
+                f"Only <@{self.target_id}> can use this button.",
+                ephemeral=True,
+            )
+            return False
+
+        return True
+
+    async def on_timeout(self) -> None:
+        """Disable the button and update the message when the response window expires."""
+        for item in self.children:
+            item.disabled = True
+
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label="RP back", style=discord.ButtonStyle.blurple)
+    async def back(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        """Reverse the original RP interaction once, then disable the button."""
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This button can only be used in a server.",
+                ephemeral=True,
+            )
+            return
+
+        if self.target_id is None:
+            target_info = PlaceholderTarget(EVERYONE_TARGET, EVERYONE_TARGET)
+            case_type = STANDARD_CASE
+        else:
+            member = guild.get_member(self.original_actor_id)
+            if member is None:
+                await interaction.response.send_message(
+                    "Couldn't find the original user.",
+                    ephemeral=True,
+                )
+                return
+            target_info = PlaceholderTarget(member.mention, member.display_name)
+            case_type = (
+                SELF_CASE
+                if interaction.user.id == self.original_actor_id
+                else STANDARD_CASE
+            )
+
+        await self.cog._execute_rp(
+            interaction,
+            self.rp_type,
+            target_info,
+            case_type,
+        )
+
+        button.disabled = True
+        self.stop()
+
+        if interaction.message is not None:
+            try:
+                await interaction.message.edit(view=self)
+            except discord.HTTPException:
+                pass
