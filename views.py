@@ -138,7 +138,7 @@ class RPBackView(discord.ui.View):
     async def back(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        """Reverse the original RP interaction once, then disable the button."""
+        """Reverse the original RP interaction, with everyone-target replies staying reusable until timeout."""
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
@@ -147,23 +147,20 @@ class RPBackView(discord.ui.View):
             )
             return
 
-        if self.target_id is None:
-            target_info = PlaceholderTarget(EVERYONE_TARGET, EVERYONE_TARGET)
-            case_type = STANDARD_CASE
-        else:
-            member = guild.get_member(self.original_actor_id)
-            if member is None:
-                await interaction.response.send_message(
-                    "Couldn't find the original user.",
-                    ephemeral=True,
-                )
-                return
-            target_info = PlaceholderTarget(member.mention, member.display_name)
-            case_type = (
-                SELF_CASE
-                if interaction.user.id == self.original_actor_id
-                else STANDARD_CASE
+        member = guild.get_member(self.original_actor_id)
+        if member is None:
+            await interaction.response.send_message(
+                "Couldn't find the original user.",
+                ephemeral=True,
             )
+            return
+
+        target_info = PlaceholderTarget(member.mention, member.display_name)
+        case_type = (
+            SELF_CASE
+            if interaction.user.id == self.original_actor_id
+            else STANDARD_CASE
+        )
 
         await self.cog._execute_rp(
             interaction,
@@ -172,10 +169,11 @@ class RPBackView(discord.ui.View):
             case_type,
         )
 
-        button.disabled = True
-        self.stop()
+        if self.target_id is not None:
+            button.disabled = True
+            self.stop()
 
-        if interaction.message is not None:
+        if self.target_id is not None and interaction.message is not None:
             try:
                 await interaction.message.edit(view=self)
             except discord.HTTPException:
