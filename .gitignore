@@ -14,3 +14,5 @@ __pycache__/
 *.sqlite3-query
 *.db-shm
 *.db-wal
+
+test.py

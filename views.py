@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import discord
 from discord.ext import commands
-
-from database import add_rp_entry
+from database import add_rp_entry, execute_query
+import time
 
 
 class ActionTextConfirmView(discord.ui.View):
@@ -87,13 +87,14 @@ class ActionTextConfirmView(discord.ui.View):
 class MarriageContainer(discord.ui.Container):    
     def __init__(self, interaction: discord.Interaction, target: discord.User, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        text = discord.ui.TextDisplay(f"Hey {target.mention}! {interaction.user.mention} wants to marry you...!")
+        self.original_interaction = interaction
+
+        text = discord.ui.TextDisplay(f"Hey {target.mention}! {interaction.user.mention} wants to marry you!")
         action_row = discord.ui.ActionRow()
         accept_button = discord.ui.Button(label="Accept", style=discord.ButtonStyle.green, emoji="💍")
-        reject_button = discord.ui.Button(label="Reject", style=discord.ButtonStyle.gray, emoji="❌")
+        reject_button = discord.ui.Button(label="Reject", style=discord.ButtonStyle.red, emoji="👎")
         action_row.add_item(accept_button)
         action_row.add_item(reject_button)
-
         accept_button.callback = self.accept_callback
         reject_button.callback = self.reject_callback
 
@@ -101,16 +102,26 @@ class MarriageContainer(discord.ui.Container):
         self.add_item(action_row)
 
     async def accept_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Accepted!")
+        proposed_id = interaction.user.id
+        proposee_id = self.original_interaction.user.id
+        marriage_candidates = [proposed_id, proposee_id]
+        marriage_candidates.sort()
+
+        await execute_query(
+            "INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (?, ?, ?)",
+            (marriage_candidates[0], marriage_candidates[1], time.time())
+        )
+        await interaction.response.send_message(f"<3 <3 Congratulations, {interaction.user.mention} and {self.original_interaction.user.mention}! You both are now happily married together! You may now kiss!")
 
     async def reject_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Rejected!")
+        await interaction.response.send_message(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your proposal...")
 
 class MarriageConfirmView(discord.ui.LayoutView):
     """Marriage confirmation view when a user requests for marriage (so they don't get raped)"""
     def __init__(self, interaction: discord.Interaction, target: discord.User) -> None:
         super().__init__()
         self.target = target
+        self.interaction = interaction
 
         self.container = container = MarriageContainer(interaction=interaction, target=target, accent_color=0x7289da)
         self.add_item(container)
@@ -118,6 +129,8 @@ class MarriageConfirmView(discord.ui.LayoutView):
     async def on_timeout(self) -> None:
         for child in self.container.children:
             child.disabled = True
+
+        await self.interaction.followup.send(f"The proposal is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.target.id:
