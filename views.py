@@ -117,8 +117,11 @@ class MarriageContainer(discord.ui.Container):
         self.view.stop()
 
     async def reject_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your proposal...")
-    
+        await self.end()
+        await interaction.response.edit_message(content=None, view=self.view)
+        await interaction.followup.send(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your proposal...")
+        self.view.stop()
+
     async def end(self):
         for child in self.children:
             if isinstance(child, discord.ui.ActionRow):
@@ -138,8 +141,12 @@ class MarriageConfirmView(discord.ui.LayoutView):
     
     async def on_timeout(self) -> None:
         for child in self.container.children:
-            child.disabled = True
-
+            if isinstance(child, discord.ui.ActionRow):
+                for item in child.children:
+                    if hasattr(item, 'disabled'):
+                        item.disabled = True
+        
+        await self.interaction.edit_original_response(content=None, view=self)
         await self.interaction.followup.send(f"The proposal is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
