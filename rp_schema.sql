@@ -44,6 +44,5 @@ CREATE TABLE IF NOT EXISTS marriages (
     spouse1_id INTEGER NOT NULL,
     spouse2_id INTEGER NOT NULL,
     marriage_date TEXT,
-    UNIQUE (spouse1_id),
-    UNIQUE (spouse2_id)
+    UNIQUE (spouse1_id, spouse2_id)
 )

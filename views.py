@@ -111,10 +111,20 @@ class MarriageContainer(discord.ui.Container):
             "INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (?, ?, ?)",
             (marriage_candidates[0], marriage_candidates[1], time.time())
         )
-        await interaction.response.send_message(f"<3 <3 Congratulations, {interaction.user.mention} and {self.original_interaction.user.mention}! You both are now happily married together! You may now kiss!")
+        await self.end()
+        await interaction.response.edit_message(content=None, view=self.view)
+        await interaction.followup.send(f"<3 <3 Congratulations, {interaction.user.mention} and {self.original_interaction.user.mention}! You both are now happily married together! You may now kiss!")
+        self.view.stop()
 
     async def reject_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your proposal...")
+    
+    async def end(self):
+        for child in self.children:
+            if isinstance(child, discord.ui.ActionRow):
+                for item in child.children:
+                    if hasattr(item, 'disabled'):
+                        item.disabled = True
 
 class MarriageConfirmView(discord.ui.LayoutView):
     """Marriage confirmation view when a user requests for marriage (so they don't get raped)"""
@@ -140,3 +150,58 @@ class MarriageConfirmView(discord.ui.LayoutView):
             )
             return False
         return True
+
+class AdoptionConfirmView(discord.ui.LayoutView):
+    """Adoption confirmation view when a user wants to adopt another one."""
+    def __init__(self, interaction: discord.Interaction, target: discord.User) -> None:
+        super().__init__()
+        self.target = target
+        self.interaction = interaction
+
+        self.container = container = AdoptContainer(interaction=interaction, target=target, accent_color=0x7289da)
+        self.add_item(container)
+    
+    async def on_timeout(self) -> None:
+        for child in self.container.children:
+            child.disabled = True
+
+        await self.interaction.followup.send(f"The adoption is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.target.id:
+            await interaction.response.send_message(
+                "Only the person who is being requested to can confirm.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+class AdoptContainer(discord.ui.Container):    
+    def __init__(self, interaction: discord.Interaction, target: discord.User, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.original_interaction = interaction
+
+        text = discord.ui.TextDisplay(f"Hey {target.mention}! {interaction.user.mention} wants to adopt you!")
+        action_row = discord.ui.ActionRow()
+        accept_button = discord.ui.Button(label="Accept", style=discord.ButtonStyle.green, emoji="🍼")
+        reject_button = discord.ui.Button(label="Reject", style=discord.ButtonStyle.red, emoji="👎")
+        action_row.add_item(accept_button)
+        action_row.add_item(reject_button)
+        accept_button.callback = self.accept_callback
+        reject_button.callback = self.reject_callback
+
+        self.add_item(text)
+        self.add_item(action_row)
+
+    async def accept_callback(self, interaction: discord.Interaction):
+        child_id = interaction.user.id
+        parent_id = self.original_interaction.user.id
+
+        await execute_query(
+            "INSERT INTO children (child_id, parent_id, adoption_date) VALUES (?, ?, ?)",
+            (child_id, parent_id, time.time())
+        )
+        await interaction.response.send_message(f"<3 <3 Congratulations, {interaction.user.mention}! You now have {self.original_interaction.user.mention} as your new parent!")
+
+    async def reject_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your adoption request...")
