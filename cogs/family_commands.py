@@ -79,6 +79,30 @@ class FamilyCommands(commands.Cog):
             return
 
         await interaction.response.send_message(view=AdoptionConfirmView(interaction, user)) 
+    
+    @app_commands.command(name="disown", description="Disown a child of yours.")
+    @app_commands.guild_only()
+    @app_commands.describe(user="Who to disown")
+    async def disown(self, interaction: discord.Interaction, user: discord.User):
+        if user.id == interaction.user.id:
+            await interaction.response.send_message("You can't disown yourself... </3")
+            return
+
+        if user.bot:
+            await interaction.response.send_message("Ain't no clanker is your child cro... :broken_heart: :sob: :v: :wilted_rose:")
+            return
+        
+        disowner_id = interaction.user.id
+        disowned_id = user.id
+
+        relationship = await fetch_one("SELECT 1 FROM children WHERE child_id = ? AND parent_id = ?", (disowned_id, disowner_id))
+
+        if not relationship:
+            await interaction.response.send_message(f"The user **{user.display_name}** is not your child!")
+            return
+        
+        await interaction.response.send_message(f"</3 {user.mention}, I'm sorry to say, but {interaction.user.mention} has decided to disown you...")
+        await execute_query("DELETE FROM children WHERE child_id = ? AND parent_id = ?", (disowned_id, disowner_id))
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(FamilyCommands(bot))
