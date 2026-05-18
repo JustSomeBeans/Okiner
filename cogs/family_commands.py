@@ -61,6 +61,14 @@ class FamilyCommands(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(user="Who to adopt")
     async def adopt(self, interaction: discord.Interaction, user: discord.User):
+        if user.id == interaction.user.id:
+            await interaction.response.send_message("You can't adopt yourself... </3")
+            return
+
+        if user.bot:
+            await interaction.response.send_message("We adopting clankers now? :wilted_rose: :sob: :v:")
+            return
+        
         soon_to_be_parent_id = interaction.user.id
         soon_to_be_child_id = user.id
 

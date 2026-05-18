@@ -170,8 +170,12 @@ class AdoptionConfirmView(discord.ui.LayoutView):
     
     async def on_timeout(self) -> None:
         for child in self.container.children:
-            child.disabled = True
-
+            if isinstance(child, discord.ui.ActionRow):
+                for item in child.children:
+                    if hasattr(item, 'disabled'):
+                        item.disabled = True
+        
+        await self.interaction.edit_original_response(content=None, view=self)
         await self.interaction.followup.send(f"The adoption is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -208,7 +212,17 @@ class AdoptContainer(discord.ui.Container):
             "INSERT INTO children (child_id, parent_id, adoption_date) VALUES (?, ?, ?)",
             (child_id, parent_id, time.time())
         )
-        await interaction.response.send_message(f"<3 <3 Congratulations, {interaction.user.mention}! You now have {self.original_interaction.user.mention} as your new parent!")
+        await self.end()
+        await interaction.response.edit_message(content=None, view=self.view)
+        await interaction.followup.send(f"<3 <3 Congratulations, {interaction.user.mention}! You now have {self.original_interaction.user.mention} as your new parent!")
+        self.view.stop()
 
     async def reject_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your adoption request...")
+    
+    async def end(self):
+        for child in self.children:
+            if isinstance(child, discord.ui.ActionRow):
+                for item in child.children:
+                    if hasattr(item, 'disabled'):
+                        item.disabled = True
