@@ -10,6 +10,7 @@ from __future__ import annotations
 # =============================================================================
 
 import discord
+import logging
 from discord.ext import commands
 from database import add_rp_entry, execute_query
 import time
@@ -107,10 +108,18 @@ class MarriageContainer(discord.ui.Container):
         marriage_candidates = [proposed_id, proposee_id]
         marriage_candidates.sort()
 
-        await execute_query(
-            "INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (?, ?, ?)",
-            (marriage_candidates[0], marriage_candidates[1], time.time())
-        )
+        try:
+            await execute_query(
+                "INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (?, ?, ?)",
+                (marriage_candidates[0], marriage_candidates[1], time.time())
+            )
+        except Exception:
+            logging.exception("Failed to create marriage record")
+            await interaction.response.send_message(
+                "I couldn't save the marriage right now because of a database issue. Please try again later.",
+                ephemeral=True,
+            )
+            return
         await self.end()
         await interaction.response.edit_message(content=None, view=self.view)
         await interaction.followup.send(f"<3 <3 Congratulations, {interaction.user.mention} and {self.original_interaction.user.mention}! You both are now happily married together! You may now kiss!")
@@ -208,10 +217,18 @@ class AdoptContainer(discord.ui.Container):
         child_id = interaction.user.id
         parent_id = self.original_interaction.user.id
 
-        await execute_query(
-            "INSERT INTO children (child_id, parent_id, adoption_date) VALUES (?, ?, ?)",
-            (child_id, parent_id, time.time())
-        )
+        try:
+            await execute_query(
+                "INSERT INTO children (child_id, parent_id, adoption_date) VALUES (?, ?, ?)",
+                (child_id, parent_id, time.time())
+            )
+        except Exception:
+            logging.exception("Failed to create child record")
+            await interaction.response.send_message(
+                "I couldn't save the adoption right now because of a database issue. Please try again later.",
+                ephemeral=True,
+            )
+            return
         await self.end()
         await interaction.response.edit_message(content=None, view=self.view)
         await interaction.followup.send(f"<3 <3 Congratulations, {interaction.user.mention}! You now have {self.original_interaction.user.mention} as your new parent!")

@@ -130,6 +130,77 @@ class OkinerBot(commands.Bot):
                     DROP TABLE rp_self_cases;
                     """
                 )
+
+            children_table_info = await conn.execute("PRAGMA table_info(children)")
+            children_columns = {row[1] for row in await children_table_info.fetchall()}
+            children_indexes = await conn.execute("PRAGMA index_list(children)")
+            children_index_rows = await children_indexes.fetchall()
+            parent_unique = False
+            for index_row in children_index_rows:
+                if not index_row[2]:
+                    continue
+                index_name = index_row[1]
+                index_info = await conn.execute(f"PRAGMA index_info({index_name!r})")
+                indexed_columns = [row[2] for row in await index_info.fetchall()]
+                if indexed_columns == ["parent_id"]:
+                    parent_unique = True
+                    break
+            if children_columns and parent_unique:
+                await conn.executescript(
+                    """
+                    ALTER TABLE children RENAME TO children_legacy;
+
+                    CREATE TABLE children (
+                        offspring_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        child_id INTEGER UNIQUE NOT NULL,
+                        parent_id INTEGER NOT NULL,
+                        adoption_date TEXT
+                    );
+
+                    INSERT INTO children (offspring_id, child_id, parent_id, adoption_date)
+                    SELECT offspring_id, child_id, parent_id, adoption_date
+                    FROM children_legacy;
+
+                    DROP TABLE children_legacy;
+                    """
+                )
+
+            marriages_table_info = await conn.execute("PRAGMA table_info(marriages)")
+            marriages_columns = {row[1] for row in await marriages_table_info.fetchall()}
+            marriages_indexes = await conn.execute("PRAGMA index_list(marriages)")
+            marriages_index_rows = await marriages_indexes.fetchall()
+            spouse1_unique = False
+            spouse2_unique = False
+            for index_row in marriages_index_rows:
+                if not index_row[2]:
+                    continue
+                index_name = index_row[1]
+                index_info = await conn.execute(f"PRAGMA index_info({index_name!r})")
+                indexed_columns = [row[2] for row in await index_info.fetchall()]
+                if indexed_columns == ["spouse1_id"]:
+                    spouse1_unique = True
+                if indexed_columns == ["spouse2_id"]:
+                    spouse2_unique = True
+            if marriages_columns and (not spouse1_unique or not spouse2_unique):
+                await conn.executescript(
+                    """
+                    ALTER TABLE marriages RENAME TO marriages_legacy;
+
+                    CREATE TABLE marriages (
+                        marriage_id INTEGER PRIMARY KEY,
+                        spouse1_id INTEGER UNIQUE NOT NULL,
+                        spouse2_id INTEGER UNIQUE NOT NULL,
+                        marriage_date TEXT,
+                        UNIQUE (spouse1_id, spouse2_id)
+                    );
+
+                    INSERT INTO marriages (marriage_id, spouse1_id, spouse2_id, marriage_date)
+                    SELECT marriage_id, spouse1_id, spouse2_id, marriage_date
+                    FROM marriages_legacy;
+
+                    DROP TABLE marriages_legacy;
+                    """
+                )
             await conn.commit()
             
         await self.load_extension("cogs.rp_commands")

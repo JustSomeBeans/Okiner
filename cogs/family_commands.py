@@ -33,6 +33,20 @@ class FamilyCommands(commands.Cog):
             await interaction.response.send_message(f"Silly! You're already happily (hopefully) married with **{user.display_name}**!")
             return
 
+        existing_spouse = await fetch_one(
+            "SELECT 1 FROM marriages WHERE spouse1_id IN (?, ?) OR spouse2_id IN (?, ?)",
+            (
+                marriage_candidates[0],
+                marriage_candidates[1],
+                marriage_candidates[0],
+                marriage_candidates[1],
+            ),
+        )
+
+        if existing_spouse:
+            await interaction.response.send_message("One of you is already married. Divorce first before proposing again.")
+            return
+
         await interaction.response.send_message(view=MarriageConfirmView(interaction, user)) 
 
     @app_commands.command(name="divorce", description="Divorce a user you have married.")
@@ -76,6 +90,15 @@ class FamilyCommands(commands.Cog):
 
         if existing_offspring:
             await interaction.response.send_message(f"Nuh uh! You already have adopted **{user.display_name}** as your child!")
+            return
+
+        existing_parent = await fetch_one(
+            "SELECT 1 FROM children WHERE child_id = ?",
+            (soon_to_be_child_id,),
+        )
+
+        if existing_parent:
+            await interaction.response.send_message(f"**{user.display_name}** already has a parent!")
             return
 
         await interaction.response.send_message(view=AdoptionConfirmView(interaction, user)) 
