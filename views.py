@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 # =============================================================================
 # views.py — Discord UI components (discord.ui.View subclasses)
 # -----------------------------------------------------------------------------
@@ -14,6 +16,13 @@ import logging
 from discord.ext import commands
 from database import add_rp_entry, execute_query
 import time
+
+from config import EVERYONE_TARGET, SELF_CASE, STANDARD_CASE
+from database import add_rp_entry
+from utils import PlaceholderTarget
+
+if TYPE_CHECKING:
+    from cogs.rp_commands import RPCommands
 
 
 class ActionTextConfirmView(discord.ui.View):
@@ -56,7 +65,7 @@ class ActionTextConfirmView(discord.ui.View):
                     content="Confirmation timed out. Run the command again if you still want to add it.",
                     view=self,
                 )
-            except discord.HTTPCException:
+            except discord.HTTPException:
                 pass # Most likely message deleted or channel gone - really not worth crashing over.
 
     @discord.ui.button(label="Yes, Add It", style=discord.ButtonStyle.green)

@@ -13,9 +13,8 @@ from __future__ import annotations
 import discord
 from discord import app_commands
 
+from config import EVERYONE_TARGET
 from utils import normalize_rp_type
-
-EVERYONE_TARGET = "everyone"
 
 
 async def rp_type_autocomplete(
