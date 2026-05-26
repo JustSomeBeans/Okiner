@@ -31,3 +31,18 @@ CREATE TABLE IF NOT EXISTS rp_self_cases (
         REFERENCES rp_types(guild_id, type)
         ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS children (
+    offspring_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+    child_id INTEGER UNIQUE NOT NULL, 
+    parent_id INTEGER NOT NULL,
+    adoption_date TEXT
+);
+
+CREATE TABLE IF NOT EXISTS marriages (
+    marriage_id INTEGER PRIMARY KEY,
+    spouse1_id INTEGER UNIQUE NOT NULL,
+    spouse2_id INTEGER UNIQUE NOT NULL,
+    marriage_date TEXT,
+    UNIQUE (spouse1_id, spouse2_id)
+)
