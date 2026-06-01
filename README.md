@@ -1,8 +1,12 @@
 # Okiner
 
-Okiner is a Python based Discord bot project intended for server member interaction, community engagement, and roleplay-focused features.
+Okiner is a Python based Discord bot for server member interaction, community engagement, and roleplay-focused features.
 
-The repository is currently set up with the structure needed to start development, including dependency management, environment configuration, and a minimal bot entrypoint.
+Current features include configurable roleplay command pools, case-specific roleplay text, image rotation, member autocomplete, temporary RP back buttons, marriage proposals, divorce, adoption requests, and disowning adopted children. Persistent data is stored in a local SQLite database.
+
+## Privacy
+
+See [PRIVACY.md](PRIVACY.md) for what data Okiner collects, stores, and uses.
 
 ## Discord Application Configuration
 
@@ -15,7 +19,6 @@ The requested bot permissions are:
 
 - Add Reactions
 - Attach Files
-- Bypass Slowmode
 - Change Nickname
 - Embed Links
 - Send Messages
@@ -27,8 +30,6 @@ The requested bot permissions are:
 - View Channels
 
 `DISCORD_APPLICATION_ID` can be added to `.env` so the bot can log a ready-to-use invite URL at startup.
-
-Note: Discord does not expose "Bypass Slowmode" as a standalone OAuth permission value in the same way as the other permissions listed above. The project documents it here because it is part of the intended bot capability set, but the generated invite URL only includes the explicit permission flags available through the Discord API.
 
 The bot also expects the following gateway intents to be enabled in the Discord Developer Portal and in code:
 
@@ -69,6 +70,18 @@ cp .env.example .env
 
 Add your bot token and application ID to `.env`.
 
+## Data Storage
+
+Okiner creates and uses `rp.db` in the project directory. On startup, it creates missing tables and applies lightweight migrations for older roleplay, adoption, and marriage table layouts.
+
+The database stores:
+
+- RP types configured per server.
+- Saved RP image URLs, embed text templates, and action text templates.
+- Discord user IDs associated with saved RP entries.
+- Marriage records.
+- Adoption records.
+
 ## Run
 
 ### Windows (PowerShell)
@@ -87,7 +100,7 @@ After the bot starts, run `oki!sync` (owner only) in a server to register slash 
 
 ## Commands
 
-All slash commands only work inside servers. Management commands require **Manage Messages** permission and are intended for moderators.
+All slash commands only work inside servers. RP management commands require **Manage Messages** permission and are intended for moderators. Family commands are available to server members.
 
 Most RP commands support autocomplete for RP type names. Commands that target another user also support member autocomplete and a special `everyone` target option.
 
@@ -204,6 +217,24 @@ Notes:
 
 - Missing expected action-text placeholders trigger a confirmation step instead of a hard rejection.
 - Nullcase action texts are most useful with `{user}` and/or `{user_name}`, because there is no target in that flow.
+
+### Family
+
+Family commands create opt-in relationship records between server members.
+
+| Command | Description |
+|---|---|
+| `/marry <user>` | Propose marriage to another non-bot user. The target user must accept the confirmation prompt before the marriage is saved. A user can only be in one marriage at a time. |
+| `/divorce <user>` | Remove an existing marriage between you and the selected user. |
+| `/adopt <user>` | Ask another non-bot user to become your child. The target user must accept the confirmation prompt before the adoption is saved. A user can only have one parent. |
+| `/disown <user>` | Remove an existing parent-child relationship where the selected user is your child. |
+
+Family behavior notes:
+
+- You cannot marry, divorce, adopt, or disown yourself.
+- Marriage and adoption requests use Discord buttons and time out if the target user does not respond.
+- Marriage records store the two user IDs and a timestamp.
+- Adoption records store the parent user ID, child user ID, and a timestamp.
 
 ## Owner Commands
 
