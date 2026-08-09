@@ -1,6 +1,10 @@
 import discord
+import io
+import math
+import networkx as nx
 from discord import app_commands
 from discord.ext import commands
+from PIL import Image, ImageDraw, ImageFont
 from database import add_rp_entry, execute_query, fetch_one
 from views import MarriageConfirmView, AdoptionConfirmView
 
