@@ -54,7 +54,7 @@ class FamilyCommands(commands.Cog):
     @app_commands.describe(user="Who to divorce")
     async def divorce(self, interaction: discord.Interaction, user: discord.User):
         if user.id == interaction.user.id:
-            await interaction.response.send_message("You can't divorce yourself... </3")
+            await interaction.response.send_message("You can't divorce yourself...")
             return
 
         divorcer_id = interaction.user.id
@@ -76,7 +76,7 @@ class FamilyCommands(commands.Cog):
     @app_commands.describe(user="Who to adopt")
     async def adopt(self, interaction: discord.Interaction, user: discord.User):
         if user.id == interaction.user.id:
-            await interaction.response.send_message("You can't adopt yourself... </3")
+            await interaction.response.send_message("You can't adopt yourself...")
             return
 
         if user.bot:
@@ -108,11 +108,11 @@ class FamilyCommands(commands.Cog):
     @app_commands.describe(user="Who to disown")
     async def disown(self, interaction: discord.Interaction, user: discord.User):
         if user.id == interaction.user.id:
-            await interaction.response.send_message("You can't disown yourself... </3")
+            await interaction.response.send_message("You can't disown yourself...")
             return
 
         if user.bot:
-            await interaction.response.send_message("Ain't no clanker is your child cro... :broken_heart: :sob: :v: :wilted_rose:")
+            await interaction.response.send_message("Ain't no clanker is your child... :broken_heart: :sob: :v: :wilted_rose:")
             return
         
         disowner_id = interaction.user.id
