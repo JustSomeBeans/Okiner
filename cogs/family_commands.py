@@ -8,12 +8,27 @@ from PIL import Image, ImageDraw, ImageFont
 from database import add_rp_entry, execute_query, fetch_one
 from views import MarriageConfirmView, AdoptionConfirmView
 
+BACKGROUND_COLOR = (248, 250, 252)
+CHILD_EDGE_COLOR = (71, 85, 105)
+MARRIAGE_EDGE_COLOR = (225, 29, 72)
+NODE_FILL_COLOR = (255, 255, 255)
+NODE_OUTLINE_COLOR = (30, 41, 59)
+TARGET_NODE_FILL_COLOR = (219, 234, 254)
+TEXT_COLOR = (15, 23, 42)
+SUBTEXT_COLOR = (71, 85, 105)
+
+NODE_WIDTH = 210
+NODE_HEIGHT = 74
+HORIZONTAL_GAP = 70
+VERTICAL_GAP = 92
+PADDING = 48
+
 class FamilyCommands(commands.Cog):
     """All family commands."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
+        
     @app_commands.command(name="marry", description="Propose to marry another user.")
     @app_commands.guild_only()
     @app_commands.describe(user="Who to marry")
