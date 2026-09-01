@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: June 1, 2026
+Last updated: Septemper 1, 2026
 
 This privacy policy explains what data Okiner collects, stores, and uses when it runs as a Discord bot. The short version: Okiner stores only the data needed to provide its roleplay and family features, does not sell data, and does not share stored data with third parties for advertising, analytics, or profiling.
 
@@ -147,8 +147,7 @@ This policy may be updated as Okiner changes. If new features collect or store n
 
 For privacy questions or deletion requests, contact the owner/operator of the official Okiner bot instance:
 
-- Operator name or handle: `[paste operator name or handle here]`
-- Contact method: `[paste email, Discord username, support server, or other contact method here]`
-- Additional contact notes: `[paste optional response-time, jurisdiction, or server-specific notes here]`
+- Operator name or handle: `[JustSomeBeans]`
+- Contact method: `[Discord username: justsomebeans]`
 
 Self-hosters must replace this section with their own contact information before making their instance available to others.
