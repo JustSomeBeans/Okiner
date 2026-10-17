@@ -48,6 +48,11 @@ def is_valid_image_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def is_imgur_page_url(url: str) -> bool:
+    """Check if URL points to an Imgur page rather than a direct image asset."""
+    return (urlparse(url).hostname or "").lower() in {"imgur.com", "www.imgur.com"}
+
+
 def apply_placeholders(
     template: str,
     actor: discord.abc.User,

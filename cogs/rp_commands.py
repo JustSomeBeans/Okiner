@@ -24,14 +24,12 @@ from __future__ import annotations
 #                                 AppCommandError, MissingPermissions,
 #                                 NoPrivateMessage, CommandOnCooldown
 #               discord.ext.commands → commands.Bot, commands.Cog
-#               urllib.parse    → urlparse
 #               logging, random, re → stdlib
 # =============================================================================
 
 import logging
 import random
 import re
-from urllib.parse import urlparse
 
 import discord
 from discord import app_commands
@@ -54,6 +52,7 @@ from utils import (
     PlaceholderTarget,
     apply_placeholders,
     build_list_messages,
+    is_imgur_page_url,
     is_valid_image_url,
     normalize_image_url,
     normalize_rp_type,
@@ -660,8 +659,7 @@ class RPCommands(commands.Cog):
             resolved_image_url = image_file.url
         else:
             resolved_image_url = normalize_image_url(image_url)
-            parsed = urlparse(resolved_image_url)
-            if parsed.netloc in {"imgur.com", "www.imgur.com"}:
+            if is_imgur_page_url(resolved_image_url):
                 await interaction.response.send_message(
                     "Please provide the direct image link. It should start with `i.imgur.com`, not `imgur.com`.",
                     ephemeral=True,
@@ -850,8 +848,7 @@ class RPCommands(commands.Cog):
 
         if col == "url":
             value = normalize_image_url(value)
-            parsed = urlparse(value)
-            if parsed.netloc in {"imgur.com", "www.imgur.com"}:
+            if is_imgur_page_url(value):
                 await interaction.response.send_message(
                     "Please provide the direct image link (`i.imgur.com`).", ephemeral=True
                 )

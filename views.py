@@ -16,9 +16,9 @@ import logging
 import sqlite3
 import time
 
-from config import EVERYONE_TARGET, SELF_CASE, STANDARD_CASE
+from config import EVERYONE_TARGET, MAX_URL_LENGTH, SELF_CASE, STANDARD_CASE
 from database import add_child, add_marriage, add_rp_entry, execute_query, fetch_column, remove_rp_entry, update_rp_entry
-from utils import PlaceholderTarget
+from utils import PlaceholderTarget, is_imgur_page_url, is_valid_image_url, normalize_image_url
 
 if TYPE_CHECKING:
     from cogs.rp_commands import RPCommands
@@ -850,8 +850,16 @@ class EditEntryModal(discord.ui.Modal):
         
         if self.browser_view.column == "url":
             new_value = normalize_image_url(new_value)
+            if is_imgur_page_url(new_value):
+                await interaction.response.send_message(
+                    "Please provide the direct image link (`i.imgur.com`).", ephemeral=True
+                )
+                return
             if not is_valid_image_url(new_value):
                 await interaction.response.send_message("Invalid image URL.", ephemeral=True)
+                return
+            if len(new_value) > MAX_URL_LENGTH:
+                await interaction.response.send_message("That URL is longer than I want to store safely.", ephemeral=True)
                 return
 
         try:
