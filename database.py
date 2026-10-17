@@ -96,13 +96,38 @@ async def add_rp_entry(
             (user_id, guild_id, type, case_type, url, texts, action_texts)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        # Previously the application pre checked for duplications in _add_text_entry,
-        # _add_action_entry, and add_image, so under normal useage, you never reach
-        # add_rp_entry with a duplicate, but there's a gap:
-        # AddTextConfirmedView.confirm calls add_rp_entry directly with no duplicate check.
-        # A user can trigger the warning, wait, then somhow submit a duplicate through
-        # the confirm button. Rare, but not impossible. 
-        # We switch to INSERT OR IGNORE and remove the false sense of safety. 
-        # Low overhead, and saves a future headache across the whole database.
         (user_id, guild_id, rp_type, case_type, url, text, action_text),
+    )
+
+
+async def remove_rp_entry(
+    guild_id: int,
+    rp_type: str,
+    case_type: str,
+    column: str,
+    value: str,
+) -> None:
+    """Remove a specific entry from roleplay_entries."""
+    if column not in {"url", "texts", "action_texts"}:
+        raise ValueError(f"Invalid column: {column!r}")
+    await execute_query(
+        f"DELETE FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND {column} = ?",
+        (guild_id, rp_type, case_type, value),
+    )
+
+
+async def update_rp_entry(
+    guild_id: int,
+    rp_type: str,
+    case_type: str,
+    column: str,
+    old_value: str,
+    new_value: str,
+) -> None:
+    """Update a specific entry in roleplay_entries in place."""
+    if column not in {"url", "texts", "action_texts"}:
+        raise ValueError(f"Invalid column: {column!r}")
+    await execute_query(
+        f"UPDATE roleplay_entries SET {column} = ? WHERE guild_id = ? AND type = ? AND case_type = ? AND {column} = ?",
+        (new_value, guild_id, rp_type, case_type, old_value),
     )

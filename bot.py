@@ -205,6 +205,8 @@ class OkinerBot(commands.Bot):
             
         await self.load_extension("cogs.rp_commands")
         await self.load_extension("cogs.family_commands")
+        await self.load_extension("cogs.moderation")
+        await self.load_extension("cogs.behavior")
 
 
     async def close(self) -> None:

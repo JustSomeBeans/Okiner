@@ -1,8 +1,8 @@
 # Privacy Policy
 
-Last updated: Septemper 1, 2026
+Last updated: October 16, 2026
 
-This privacy policy explains what data Okiner collects, stores, and uses when it runs as a Discord bot. The short version: Okiner stores only the data needed to provide its roleplay and family features, does not sell data, and does not share stored data with third parties for advertising, analytics, or profiling.
+This privacy policy explains what data Okiner collects, stores, and uses when it runs as a Discord bot. The short version: Okiner stores only the data needed to provide its roleplay, family, security, and moderation features, does not sell data, and does not share stored data with third parties for advertising, analytics, or profiling.
 
 ## Instance Operator
 
@@ -24,6 +24,8 @@ Okiner stores the following server configuration data:
 
 - Discord server IDs for servers that configure roleplay features.
 - Roleplay type names created for each server.
+- Server configuration settings (log channel IDs, honeypot channel IDs, verified role IDs, moderator role IDs, and inactivity system toggle states).
+- Allowlisted channel IDs for `/scan`.
 
 Okiner stores the following roleplay content data:
 
@@ -42,6 +44,11 @@ Okiner stores the following family feature data:
 - Marriage timestamps.
 - Adoption timestamps.
 
+Okiner stores the following moderation and activity telemetry data:
+
+- Member behavior records per guild (total message counts, join timestamps, last active timestamps, and inactivity reset/status timestamps).
+- Guild custom emoji usage counts for messages and reactions.
+
 Okiner does not intentionally store message contents from regular chat messages. The only text content stored by the bot is content deliberately submitted through Okiner commands, such as roleplay text templates, action text templates, roleplay type names, and image URLs.
 
 ## Data Okiner Uses Temporarily
@@ -55,6 +62,7 @@ Okiner may temporarily use:
 - The target user's Discord ID, mention, username, and display name when a command targets another member.
 - Server member lists, usernames, display names, and user IDs for target autocomplete and member lookup.
 - Interaction data needed to reply to slash commands and button clicks.
+- Modal inputs, select menu selections, and button interaction data for guided roleplay creation, management, and setup.
 - Message references for temporary confirmation buttons and roleplay back buttons.
 
 The bot currently enables these Discord gateway intents in code:
@@ -63,7 +71,7 @@ The bot currently enables these Discord gateway intents in code:
 - Server Members Intent.
 - Message Content Intent.
 
-At the time of this policy, Okiner uses member data for member lookup and autocomplete. Okiner does not intentionally store presence data or regular message content. Message Content Intent is enabled for bot operation and prefix command support, but regular chat messages are not saved by Okiner.
+At the time of this policy, Okiner uses member data for member lookup and autocomplete. Okiner does not intentionally store presence data or regular message content. Message Content Intent is enabled for bot operation, alt/trust scanning, message activity tracking, and emoji/reaction tracking.
 
 ## How Data Is Used
 
@@ -78,6 +86,8 @@ Okiner uses stored and temporary data to:
 - Store and check parent-child adoption relationships.
 - Remove relationship records when divorce or disown commands are used.
 - Send command responses, confirmation prompts, and temporary buttons.
+- Run native Python alt/trust analysis (`/scan`) and enforce honeypot channel security (banning non-staff members posting in the designated honeypot channel).
+- Track community engagement metrics (emoji usage leaderboards and member activity).
 - Log startup status and unexpected errors for debugging and maintenance.
 
 ## Logs
@@ -104,12 +114,9 @@ Okiner necessarily operates through Discord. Command inputs, command responses, 
 
 Okiner keeps stored data until it is removed by command, deleted from the database by the bot owner/operator, or no longer needed for the bot's operation.
 
-Current command-based deletion includes:
+Current command-based deletion and management includes:
 
-- `/removetype`, which removes a roleplay type and its saved roleplay entries for that server.
-- `/removeimage`, which removes a saved image URL.
-- `/removetext`, `/removeselftext`, and `/removenulltext`, which remove saved text templates.
-- `/removeactiontext`, `/removeselfactiontext`, and `/removenullactiontext`, which remove saved action text templates.
+- `/manage_rp`, which provides an interactive navigation flow to browse, edit, or delete roleplay types, image URLs, embed text templates, and action text templates (including standard, selfcase, and nullcase pools) or delete entire roleplay types.
 - `/divorce`, which removes a marriage record.
 - `/disown`, which removes an adoption relationship record.
 
@@ -117,7 +124,7 @@ Server administrators or users may contact the bot owner/operator to request del
 
 ## Access and Control
 
-Roleplay management commands are restricted to users with the Manage Messages permission.
+Roleplay management and moderation commands are restricted to users with appropriate permissions (Manage Messages or Administrator).
 
 Family feature commands can be used by server members in servers where Okiner is installed. Marriage and adoption records are created only after the target user accepts the bot's confirmation prompt.
 
