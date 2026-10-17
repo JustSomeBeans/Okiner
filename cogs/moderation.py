@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 import discord
 from discord import app_commands
@@ -216,21 +217,33 @@ class Moderation(commands.Cog):
             return
 
         # Non-staff posted in honeypot -> ban
+        banned = True
         try:
             await message.author.ban(reason="Triggered honeypot channel")
             await message.delete()
-        except Exception:
-            pass
+        except discord.Forbidden as e:
+            banned = False
+            logging.error(f"Failed to ban user {message.author.id} in guild {guild_id} due to missing permissions (Forbidden): {e}")
+        except discord.HTTPException as e:
+            banned = False
+            logging.error(f"Failed to ban user {message.author.id} in guild {guild_id} due to HTTP exception: {e}")
 
         log_channel_id = row[1]
         if log_channel_id:
             log_chan = message.guild.get_channel(log_channel_id)
             if log_chan and isinstance(log_chan, discord.TextChannel):
-                log_embed = discord.Embed(
-                    title="Honeypot Triggered",
-                    color=0xe74c3c,
-                    description=f"{message.author.mention} ({message.author.id}) posted in honeypot channel {message.channel.mention} and was banned."
-                )
+                if banned:
+                    log_embed = discord.Embed(
+                        title="Honeypot Triggered",
+                        color=0xe74c3c,
+                        description=f"{message.author.mention} ({message.author.id}) posted in honeypot channel {message.channel.mention} and was banned."
+                    )
+                else:
+                    log_embed = discord.Embed(
+                        title="Honeypot Triggered (Ban Failed)",
+                        color=0xf1c40f,
+                        description=f"{message.author.mention} ({message.author.id}) posted in honeypot channel {message.channel.mention}, but **automated banning failed** due to missing permissions or API error. Manual intervention required!"
+                    )
                 await log_chan.send(embed=log_embed)
 
 async def setup(bot: commands.Bot) -> None:

@@ -296,7 +296,7 @@ class FamilyCommands(commands.Cog):
     async def family_tree(
         self,
         interaction: discord.Interaction,
-        user: discord.User = None,
+        user: discord.User | None = None,
     ) -> None:
         guild = interaction.guild
         if guild is None:

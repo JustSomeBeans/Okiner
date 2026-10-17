@@ -50,6 +50,7 @@ async def execute_query(query: str, params: tuple = ()) -> None:
 async def fetch_one(query: str, params: tuple = ()) -> tuple | None:
     """Fetch a single database row."""
     async with _pool().acquire() as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
         result = await conn.execute(query, params)
         return await result.fetchone()
 
@@ -57,9 +58,32 @@ async def fetch_one(query: str, params: tuple = ()) -> tuple | None:
 async def fetch_column(query: str, params: tuple = ()) -> list[str]:
     """Fetch the first column from all returned rows as a plain string list."""
     async with _pool().acquire() as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
         result = await conn.execute(query, params)
         rows = await result.fetchall()
     return [str(row[0]) for row in rows]
+
+
+async def add_marriage(spouse1_id: int, spouse2_id: int, marriage_date: float) -> None:
+    """Atomically create a marriage record within a transaction."""
+    async with _pool().acquire() as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (?, ?, ?)",
+                (spouse1_id, spouse2_id, marriage_date),
+            )
+
+
+async def add_child(child_id: int, parent_id: int, adoption_date: float) -> None:
+    """Atomically create an adoption record within a transaction."""
+    async with _pool().acquire() as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO children (child_id, parent_id, adoption_date) VALUES (?, ?, ?)",
+                (child_id, parent_id, adoption_date),
+            )
 
 
 async def rp_type_exists(guild_id: int, rp_type: str) -> bool:

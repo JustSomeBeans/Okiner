@@ -13,10 +13,11 @@ from typing import TYPE_CHECKING
 
 import discord
 import logging
+import sqlite3
 import time
 
 from config import EVERYONE_TARGET, SELF_CASE, STANDARD_CASE
-from database import add_rp_entry, execute_query, fetch_column, remove_rp_entry, update_rp_entry
+from database import add_child, add_marriage, add_rp_entry, execute_query, fetch_column, remove_rp_entry, update_rp_entry
 from utils import PlaceholderTarget
 
 if TYPE_CHECKING:
@@ -206,10 +207,13 @@ class MarriageContainer(discord.ui.Container):
         marriage_candidates.sort()
 
         try:
-            await execute_query(
-                "INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (?, ?, ?)",
-                (marriage_candidates[0], marriage_candidates[1], time.time())
+            await add_marriage(marriage_candidates[0], marriage_candidates[1], time.time())
+        except sqlite3.IntegrityError:
+            await interaction.response.send_message(
+                "You or your partner are already married, or a conflicting relationship record exists.",
+                ephemeral=True,
             )
+            return
         except Exception:
             logging.exception("Failed to create marriage record")
             await interaction.response.send_message(
@@ -315,10 +319,13 @@ class AdoptContainer(discord.ui.Container):
         parent_id = self.original_interaction.user.id
 
         try:
-            await execute_query(
-                "INSERT INTO children (child_id, parent_id, adoption_date) VALUES (?, ?, ?)",
-                (child_id, parent_id, time.time())
+            await add_child(child_id, parent_id, time.time())
+        except sqlite3.IntegrityError:
+            await interaction.response.send_message(
+                "You already have a parent or this adoption relationship already exists.",
+                ephemeral=True,
             )
+            return
         except Exception:
             logging.exception("Failed to create child record")
             await interaction.response.send_message(
@@ -332,7 +339,10 @@ class AdoptContainer(discord.ui.Container):
         self.view.stop()
 
     async def reject_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your adoption request...")
+        await self.end()
+        await interaction.response.edit_message(content=None, view=self.view)
+        await interaction.followup.send(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your adoption request...")
+        self.view.stop()
     
     async def end(self):
         for child in self.children:
