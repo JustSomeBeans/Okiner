@@ -161,7 +161,7 @@ class RPCommands(commands.Cog):
             return PlaceholderTarget(EVERYONE_TARGET, EVERYONE_TARGET), STANDARD_CASE, None
         member = self._find_member(guild, raw_target)
         if member is None:
-            raise RuntimeError("_resolve_target called outside of a guild context")
+            return None
         return (
             PlaceholderTarget(member.mention, member.display_name),
             SELF_CASE if member.id == interaction.user.id else STANDARD_CASE,
