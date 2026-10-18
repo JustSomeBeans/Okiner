@@ -25,6 +25,51 @@ if TYPE_CHECKING:
 _bot: "OkinerBot | None" = None
 
 
+INTEGRITY_TRIGGERS_SQL = """
+DROP TRIGGER IF EXISTS trg_marriages_ordering;
+CREATE TRIGGER trg_marriages_ordering BEFORE INSERT ON marriages
+WHEN NEW.spouse1_id >= NEW.spouse2_id
+BEGIN
+    SELECT RAISE(ABORT, 'self or unordered marriage');
+END;
+
+DROP TRIGGER IF EXISTS trg_marriages_bigamy;
+CREATE TRIGGER trg_marriages_bigamy BEFORE INSERT ON marriages
+WHEN EXISTS (SELECT 1 FROM marriages WHERE spouse1_id IN (NEW.spouse1_id, NEW.spouse2_id) OR spouse2_id IN (NEW.spouse1_id, NEW.spouse2_id))
+BEGIN
+    SELECT RAISE(ABORT, 'already married');
+END;
+
+DROP TRIGGER IF EXISTS trg_marriages_parent_child;
+CREATE TRIGGER trg_marriages_parent_child BEFORE INSERT ON marriages
+WHEN EXISTS (SELECT 1 FROM children WHERE (child_id=NEW.spouse1_id AND parent_id=NEW.spouse2_id) OR (child_id=NEW.spouse2_id AND parent_id=NEW.spouse1_id))
+BEGIN
+    SELECT RAISE(ABORT, 'parent/child cannot marry');
+END;
+
+DROP TRIGGER IF EXISTS trg_children_self;
+CREATE TRIGGER trg_children_self BEFORE INSERT ON children
+WHEN NEW.child_id = NEW.parent_id
+BEGIN
+    SELECT RAISE(ABORT, 'self adoption');
+END;
+
+DROP TRIGGER IF EXISTS trg_children_reverse;
+CREATE TRIGGER trg_children_reverse BEFORE INSERT ON children
+WHEN EXISTS (SELECT 1 FROM children WHERE child_id=NEW.parent_id AND parent_id=NEW.child_id)
+BEGIN
+    SELECT RAISE(ABORT, 'reverse relationship');
+END;
+
+DROP TRIGGER IF EXISTS trg_children_spouse;
+CREATE TRIGGER trg_children_spouse BEFORE INSERT ON children
+WHEN EXISTS (SELECT 1 FROM marriages WHERE (spouse1_id=NEW.child_id AND spouse2_id=NEW.parent_id) OR (spouse1_id=NEW.parent_id AND spouse2_id=NEW.child_id))
+BEGIN
+    SELECT RAISE(ABORT, 'spouses cannot adopt each other');
+END;
+"""
+
+
 def set_bot(bot: "OkinerBot") -> None:
     """Wire the database module to the running bot instance."""
     global _bot

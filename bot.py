@@ -80,6 +80,16 @@ class OkinerBot(commands.Bot):
             # executescript runs the full SQL file — safe to call every startup
             # because every table uses CREATE TABLE IF NOT EXISTS.
             await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            await conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS trg_marriages_ordering;
+                DROP TRIGGER IF EXISTS trg_marriages_bigamy;
+                DROP TRIGGER IF EXISTS trg_marriages_parent_child;
+                DROP TRIGGER IF EXISTS trg_children_self;
+                DROP TRIGGER IF EXISTS trg_children_reverse;
+                DROP TRIGGER IF EXISTS trg_children_spouse;
+                """
+            )
             table_info = await conn.execute("PRAGMA table_info(roleplay_entries)")
             columns = {row[1] for row in await table_info.fetchall()}
             if "case_type" not in columns:
@@ -201,6 +211,7 @@ class OkinerBot(commands.Bot):
                     DROP TABLE marriages_legacy;
                     """
                 )
+            await conn.executescript(database.INTEGRITY_TRIGGERS_SQL)
             await conn.commit()
             
         await self.load_extension("cogs.rp_commands")
