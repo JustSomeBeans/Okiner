@@ -1,8 +1,33 @@
+import asyncio
+import tempfile
+import pathlib
 import sqlite3
 import unittest
-from database import INTEGRITY_TRIGGERS_SQL
+import asqlite
+from database import INTEGRITY_TRIGGERS_SQL, add_marriage, add_child, set_bot
 
-class TestDBInvariants(unittest.TestCase):
+class StubBot:
+    def __init__(self, db_pool):
+        self.db_pool = db_pool
+
+class TestDBInvariants(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        self.pool = await asqlite.create_pool(self.db_path)
+        self.stub_bot = StubBot(self.pool)
+        set_bot(self.stub_bot)
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            schema_path = pathlib.Path("rp_schema.sql")
+            await conn.executescript(schema_path.read_text(encoding="utf-8"))
+            await conn.executescript(INTEGRITY_TRIGGERS_SQL)
+            await conn.commit()
+
+    async def asyncTearDown(self):
+        await self.pool.close()
+        pathlib.Path(self.db_path).unlink(missing_ok=True)
+
     def test_migration_and_triggers(self):
         conn = sqlite3.connect(":memory:")
         conn.execute("PRAGMA foreign_keys = ON")
@@ -150,11 +175,12 @@ class TestDBInvariants(unittest.TestCase):
             DROP TABLE marriages_legacy;
         """)
         conn_a.executescript(INTEGRITY_TRIGGERS_SQL)
-        # Verify valid insert works
+        # Verify valid insert works for both marriages and children (disjoint IDs to avoid spouse adoption rule)
         try:
             conn_a.execute("INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (10, 20, '1000')")
+            conn_a.execute("INSERT INTO children (child_id, parent_id, adoption_date) VALUES (15, 25, '1000')")
             conn_a.commit()
-            print("Drop-before-rename (a): Rebuild succeeded and valid insert committed successfully.")
+            print("Drop-before-rename (a): Rebuild succeeded and valid inserts into marriages and children committed successfully.")
         except sqlite3.Error as e:
             self.fail(f"(a) Failed: {e}")
         conn_a.close()
@@ -203,14 +229,53 @@ class TestDBInvariants(unittest.TestCase):
             if "marriages_legacy" in (trig_sql or ""):
                 print("    -> Observed: SQLite automatically rewrote trigger body referencing renamed table 'marriages' to 'marriages_legacy'!")
 
-        # Attempt insert and observe behavior
+        # Attempt insert into children (which references marriages_legacy) and print resulting error
         try:
-            conn_b.execute("INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (15, 25, '1000')")
+            conn_b.execute("INSERT INTO children (child_id, parent_id, adoption_date) VALUES (15, 25, '1000')")
             conn_b.commit()
-            print("Drop-before-rename (b): Insert succeeded (trigger references legacy table).")
+            print("Drop-before-rename (b): Insert into children succeeded.")
         except sqlite3.Error as e:
-            print(f"Drop-before-rename (b): Insert failed with error: {e}")
+            print(f"Drop-before-rename (b): Insert into children failed with expected error: {e}")
         conn_b.close()
+
+    async def test_add_marriage_and_child_helpers(self):
+        # 1. Valid marriage and valid adoption succeed
+        await add_marriage(10, 20, "1000")
+        await add_child(100, 10, "1000")
+
+        # 2. Unsorted input (5, 1) is stored sorted as (1, 5)
+        await add_marriage(5, 1, "1000")
+        async with self.pool.acquire() as conn:
+            cursor = await conn.execute("SELECT spouse1_id, spouse2_id FROM marriages WHERE spouse1_id = 1 OR spouse2_id = 1")
+            row = await cursor.fetchone()
+            self.assertEqual((row[0], row[1]), (1, 5))
+
+        # 3. Bigamy via the real function raises IntegrityError
+        with self.assertRaises(sqlite3.IntegrityError):
+            await add_marriage(1, 99, "1000")
+
+        # 4. 3-cycle A->B->C->A is rejected on the third add_child
+        await add_child(201, 200, "1000")
+        await add_child(202, 201, "1000")
+        with self.assertRaises(sqlite3.IntegrityError):
+            await add_child(200, 202, "1000")
+
+        # 5. asyncio.gather of add_marriage(300, 301) and add_marriage(301, 302) yields exactly one success and one IntegrityError
+        results = await asyncio.gather(
+            add_marriage(300, 301, "1000"),
+            add_marriage(301, 302, "1000"),
+            return_exceptions=True
+        )
+        successes = [r for r in results if r is None]
+        errors = [r for r in results if isinstance(r, sqlite3.IntegrityError)]
+        self.assertEqual(len(successes), 1)
+        self.assertEqual(len(errors), 1)
+
+        # 6. After a rejected insert, a following valid insert on the same pool still works (proves no leaked open transaction)
+        with self.assertRaises(sqlite3.IntegrityError):
+            await add_marriage(10, 20, "1000") # duplicate/bigamy conflict
+
+        await add_marriage(400, 401, "1000") # Should succeed
 
 if __name__ == "__main__":
     unittest.main()

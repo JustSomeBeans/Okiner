@@ -12,6 +12,7 @@ from __future__ import annotations
 #                                    runtime reference is injected via set_bot())
 # =============================================================================
 
+import sqlite3
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -110,25 +111,54 @@ async def fetch_column(query: str, params: tuple = ()) -> list[str]:
 
 
 async def add_marriage(spouse1_id: int, spouse2_id: int, marriage_date: float) -> None:
-    """Atomically create a marriage record within a transaction."""
+    """Atomically create a marriage record with sorted pair, BEGIN IMMEDIATE, and rollback on error."""
+    spouse1, spouse2 = sorted([spouse1_id, spouse2_id])
     async with _pool().acquire() as conn:
         await conn.execute("PRAGMA foreign_keys = ON")
-        async with conn.transaction():
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
             await conn.execute(
                 "INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (?, ?, ?)",
-                (spouse1_id, spouse2_id, marriage_date),
+                (spouse1, spouse2, marriage_date),
             )
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
 
 
 async def add_child(child_id: int, parent_id: int, adoption_date: float) -> None:
-    """Atomically create an adoption record within a transaction."""
+    """Atomically create an adoption record with cycle detection, BEGIN IMMEDIATE, and rollback on error."""
     async with _pool().acquire() as conn:
         await conn.execute("PRAGMA foreign_keys = ON")
-        async with conn.transaction():
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await conn.execute(
+                """
+                WITH RECURSIVE ancestors(id, depth) AS (
+                    SELECT parent_id, 1 FROM children WHERE child_id = ?
+                    UNION ALL
+                    SELECT c.parent_id, a.depth + 1
+                    FROM children c
+                    JOIN ancestors a ON c.child_id = a.id
+                    WHERE a.depth < 50
+                )
+                SELECT 1 FROM ancestors WHERE id = ?
+                """,
+                (parent_id, child_id),
+            )
+            row = await cursor.fetchone()
+            if row is not None or child_id == parent_id:
+                raise sqlite3.IntegrityError("ancestry cycle")
+
             await conn.execute(
                 "INSERT INTO children (child_id, parent_id, adoption_date) VALUES (?, ?, ?)",
                 (child_id, parent_id, adoption_date),
             )
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
 
 
 async def rp_type_exists(guild_id: int, rp_type: str) -> bool:
