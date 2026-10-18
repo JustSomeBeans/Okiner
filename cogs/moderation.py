@@ -135,6 +135,19 @@ class Moderation(commands.Cog):
         if not guild_id:
             return
 
+        if channel is not None:
+            row = await database.fetch_one(
+                "SELECT log_channel_id FROM guild_configs WHERE guild_id = ?",
+                (guild_id,)
+            )
+            log_id = row[0] if row else None
+            if log_id and log_id == channel.id:
+                await interaction.response.send_message(
+                    "The honeypot channel can't be the same as the log channel.",
+                    ephemeral=True,
+                )
+                return
+
         channel_id = channel.id if channel else None
         await database.execute_query(
             """
@@ -144,6 +157,9 @@ class Moderation(commands.Cog):
             (guild_id, channel_id)
         )
         msg = f"Honeypot channel set to {channel.mention}." if channel else "Honeypot channel cleared."
+        if channel is not None and interaction.guild and interaction.guild.me:
+            if not interaction.guild.me.guild_permissions.ban_members:
+                msg += " Warning: I don't have the Ban Members permission, so I can't ban anyone who triggers this until you grant it."
         await interaction.response.send_message(msg, ephemeral=True)
 
     @app_commands.command(name="addscanchannel", description="Allowlist a channel for /scan.")
