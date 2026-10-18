@@ -11,11 +11,38 @@ from alt_detector import calculate_alt_score, get_score_summary, format_signed_s
 
 bot_started_at = time.time()
 
+
+def is_honeypot_exempt(member: discord.Member, mod_role_id: int | None) -> bool:
+    """Return True if member is exempt from honeypot punishment."""
+    if member.guild.owner_id and member.id == member.guild.owner_id:
+        return True
+    perms = member.guild_permissions
+    if (
+        perms.administrator
+        or perms.manage_guild
+        or perms.ban_members
+        or perms.kick_members
+        or perms.manage_messages
+    ):
+        return True
+    if mod_role_id is not None and any(r.id == mod_role_id for r in member.roles):
+        return True
+    return False
+
+
+def channel_matches_honeypot(
+    channel: discord.abc.GuildChannel | discord.Thread, honeypot_id: int
+) -> bool:
+    """Return True if channel matches honeypot ID directly or via parent_id."""
+    return channel.id == honeypot_id or getattr(channel, "parent_id", None) == honeypot_id
+
+
 class Moderation(commands.Cog):
     """Moderation and security commands for Crouton."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._in_flight_honeypot: set[tuple[int, int]] = set()
 
     crouton_group = app_commands.Group(name="crouton", description="Crouton bot configuration and info")
 
@@ -195,10 +222,13 @@ class Moderation(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if not message.guild or message.author.bot:
+        if not isinstance(message.author, discord.Member) or message.author.bot or message.guild is None:
             return
 
-        guild_id = message.guild.id
+        guild = message.guild
+        guild_id = guild.id
+        user_id = message.author.id
+
         row = await database.fetch_one(
             "SELECT honeypot_channel_id, log_channel_id, moderator_role_id FROM guild_configs WHERE guild_id = ?",
             (guild_id,)
@@ -207,44 +237,75 @@ class Moderation(commands.Cog):
             return
 
         honeypot_id = row[0]
-        if message.channel.id != honeypot_id:
+        if not channel_matches_honeypot(message.channel, honeypot_id):
             return
 
-        # Check if author is staff / admin / mod
         mod_role_id = row[2]
-        is_staff = message.author.guild_permissions.administrator or (mod_role_id and any(r.id == mod_role_id for r in message.author.roles))
-        if is_staff:
+        if is_honeypot_exempt(message.author, mod_role_id):
             return
 
-        # Non-staff posted in honeypot -> ban
-        banned = True
-        try:
-            await message.author.ban(reason="Triggered honeypot channel")
-            await message.delete()
-        except discord.Forbidden as e:
-            banned = False
-            logging.error(f"Failed to ban user {message.author.id} in guild {guild_id} due to missing permissions (Forbidden): {e}")
-        except discord.HTTPException as e:
-            banned = False
-            logging.error(f"Failed to ban user {message.author.id} in guild {guild_id} due to HTTP exception: {e}")
+        flight_key = (guild_id, user_id)
+        if flight_key in self._in_flight_honeypot:
+            return
 
-        log_channel_id = row[1]
-        if log_channel_id:
-            log_chan = message.guild.get_channel(log_channel_id)
-            if log_chan and isinstance(log_chan, discord.TextChannel):
-                if banned:
-                    log_embed = discord.Embed(
-                        title="Honeypot Triggered",
-                        color=0xe74c3c,
-                        description=f"{message.author.mention} ({message.author.id}) posted in honeypot channel {message.channel.mention} and was banned."
+        self._in_flight_honeypot.add(flight_key)
+        try:
+            ban_performed = False
+            skip_reason = None
+
+            me = guild.me
+            if not me or not me.guild_permissions.ban_members:
+                skip_reason = "Bot lacks ban_members permission"
+            elif message.author.id == guild.owner_id:
+                skip_reason = "Cannot ban guild owner"
+            elif message.author.top_role >= me.top_role:
+                skip_reason = "Target member has equal or higher role than bot"
+            else:
+                try:
+                    await guild.ban(
+                        message.author,
+                        reason="Triggered honeypot channel",
+                        delete_message_seconds=3600
                     )
-                else:
-                    log_embed = discord.Embed(
-                        title="Honeypot Triggered (Ban Failed)",
-                        color=0xf1c40f,
-                        description=f"{message.author.mention} ({message.author.id}) posted in honeypot channel {message.channel.mention}, but **automated banning failed** due to missing permissions or API error. Manual intervention required!"
-                    )
-                await log_chan.send(embed=log_embed)
+                    ban_performed = True
+                except discord.Forbidden as e:
+                    skip_reason = f"Missing permissions (Forbidden): {e}"
+                    logging.error(f"Failed to ban user {user_id} in guild {guild_id} due to missing permissions (Forbidden): {e}")
+                except discord.HTTPException as e:
+                    skip_reason = f"HTTP exception: {e}"
+                    logging.error(f"Failed to ban user {user_id} in guild {guild_id} due to HTTP exception: {e}")
+
+            if not ban_performed:
+                try:
+                    await message.delete()
+                except (discord.Forbidden, discord.NotFound, discord.HTTPException) as e:
+                    logging.warning(f"Failed to delete message after honeypot trigger for user {user_id} in guild {guild_id}: {e}")
+
+            log_channel_id = row[1]
+            if log_channel_id:
+                log_chan = guild.get_channel(log_channel_id)
+                if log_chan and isinstance(log_chan, discord.TextChannel):
+                    if ban_performed:
+                        log_embed = discord.Embed(
+                            title="Honeypot Triggered",
+                            color=0xe74c3c,
+                            description=f"{message.author.mention} ({user_id}) posted in honeypot channel {message.channel.mention} and was banned."
+                        )
+                    else:
+                        desc = f"{message.author.mention} ({user_id}) posted in honeypot channel {message.channel.mention}, but **automated banning failed**."
+                        if skip_reason:
+                            desc += f" Reason: {skip_reason}"
+                        log_embed = discord.Embed(
+                            title="Honeypot Triggered (Ban Failed)",
+                            color=0xf1c40f,
+                            description=desc
+                        )
+                    try:
+                        await log_chan.send(embed=log_embed)
+                    except (discord.Forbidden, discord.HTTPException) as e:
+                        logging.error(f"Failed to send honeypot log embed in guild {guild_id}: {e}")
+        finally:
+            self._in_flight_honeypot.discard(flight_key)
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Moderation(bot))
