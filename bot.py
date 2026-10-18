@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 
 import asqlite
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 import database
@@ -56,6 +57,54 @@ def build_invite_url(application_id: str) -> str:
     return f"https://discord.com/oauth2/authorize?{query}"
 
 
+class OkinerTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            if interaction.type is discord.InteractionType.application_command:
+                if not interaction.response.is_done():
+                    try:
+                        await interaction.response.send_message(
+                            "This command only works in a server.", ephemeral=True
+                        )
+                    except discord.HTTPException:
+                        pass
+            return False
+        return True
+
+    async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        original = error.original if isinstance(error, app_commands.CommandInvokeError) else error
+
+        if isinstance(original, app_commands.MissingPermissions):
+            msg = "You don't have permission to do that."
+        elif isinstance(original, app_commands.BotMissingPermissions):
+            msg = "I'm missing permissions I need for that."
+        elif isinstance(original, app_commands.NoPrivateMessage):
+            msg = "This command only works in a server."
+        elif isinstance(original, app_commands.CommandOnCooldown):
+            msg = f"Slow down. Try again in {original.retry_after:.0f}s."
+        elif isinstance(original, app_commands.CheckFailure):
+            msg = "You can't use that command here."
+        else:
+            cmd_name = interaction.command.qualified_name if interaction.command else "unknown"
+            logging.error(
+                "Unhandled application command error in %r",
+                cmd_name,
+                exc_info=(type(original), original, original.__traceback__),
+            )
+            msg = "Something went wrong. Please try again later."
+
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.send_message(msg, ephemeral=True)
+            except discord.HTTPException:
+                logging.warning("Failed to send ephemeral error response")
+        else:
+            try:
+                await interaction.followup.send(msg, ephemeral=True)
+            except discord.HTTPException:
+                logging.warning("Failed to send ephemeral error followup")
+
+
 class OkinerBot(commands.Bot):
     def __init__(self) -> None:
         super().__init__(
@@ -63,6 +112,7 @@ class OkinerBot(commands.Bot):
             command_prefix="oki!",
             application_id=int(APPLICATION_ID) if APPLICATION_ID else None,
             help_command=None,
+            tree_cls=OkinerTree,
         )
         self.db_pool: asqlite.Pool | None = None
 

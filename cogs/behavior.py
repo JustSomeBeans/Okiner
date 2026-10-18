@@ -17,12 +17,12 @@ class Behavior(commands.Cog):
     def cog_unload(self) -> None:
         self.inactivity_sweep.cancel()
 
+    # default_permissions is a UI hint, not a security boundary
     @app_commands.command(name="enableunverification", description="Turns on the automatic unverification sweep.")
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True)
     async def enableunverification(self, interaction: discord.Interaction) -> None:
         guild_id = interaction.guild_id
-        if not guild_id:
-            return
 
         row = await database.fetch_one(
             "SELECT verified_role_id FROM guild_configs WHERE guild_id = ?",
@@ -41,12 +41,12 @@ class Behavior(commands.Cog):
         )
         await interaction.response.send_message("Automatic unverification system enabled.", ephemeral=True)
 
+    # default_permissions is a UI hint, not a security boundary
     @app_commands.command(name="disableunverification", description="Turns off the automatic unverification sweep.")
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True)
     async def disableunverification(self, interaction: discord.Interaction) -> None:
         guild_id = interaction.guild_id
-        if not guild_id:
-            return
 
         await database.execute_query(
             """
@@ -57,12 +57,12 @@ class Behavior(commands.Cog):
         )
         await interaction.response.send_message("Automatic unverification system disabled.", ephemeral=True)
 
+    # default_permissions is a UI hint, not a security boundary
     @app_commands.command(name="manualresetinactivity", description="Resets a member's inactivity timer.")
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True)
     async def manualresetinactivity(self, interaction: discord.Interaction, member: discord.Member) -> None:
         guild_id = interaction.guild_id
-        if not guild_id:
-            return
 
         now = int(discord.utils.utcnow().timestamp())
         await database.execute_query(
@@ -84,9 +84,10 @@ class Behavior(commands.Cog):
         app_commands.Choice(name="Bottom (Least used)", value="bottom"),
     ])
     async def emojirank(self, interaction: discord.Interaction, sort_direction: str = "top") -> None:
-        guild_id = interaction.guild_id
-        if not guild_id or not interaction.guild:
+        if interaction.guild is None or interaction.guild_id is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
             return
+        guild_id = interaction.guild_id
 
         order = "DESC" if sort_direction == "top" else "ASC"
         rows = await database.fetch_one(
@@ -124,9 +125,10 @@ class Behavior(commands.Cog):
         app_commands.Choice(name="Bottom (Least used)", value="bottom"),
     ])
     async def reactionrank(self, interaction: discord.Interaction, sort_direction: str = "top") -> None:
-        guild_id = interaction.guild_id
-        if not guild_id or not interaction.guild:
+        if interaction.guild is None or interaction.guild_id is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
             return
+        guild_id = interaction.guild_id
 
         order = "DESC" if sort_direction == "top" else "ASC"
         async with self.bot.db_pool.acquire() as conn:

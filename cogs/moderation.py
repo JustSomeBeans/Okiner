@@ -128,12 +128,12 @@ class Moderation(commands.Cog):
         uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days > 0 else f"{hours}h {minutes}m {seconds}s"
         await interaction.response.send_message(f"Crouton bot has been online for **{uptime_str}**.", ephemeral=True)
 
+    # default_permissions is a UI hint, not a security boundary
     @app_commands.command(name="sethoneypot", description="Sets or clears the server honeypot channel.")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def sethoneypot(self, interaction: discord.Interaction, channel: discord.TextChannel | None = None) -> None:
         guild_id = interaction.guild_id
-        if not guild_id:
-            return
 
         if channel is not None:
             row = await database.fetch_one(
@@ -162,12 +162,12 @@ class Moderation(commands.Cog):
                 msg += " Warning: I don't have the Ban Members permission, so I can't ban anyone who triggers this until you grant it."
         await interaction.response.send_message(msg, ephemeral=True)
 
+    # default_permissions is a UI hint, not a security boundary
     @app_commands.command(name="addscanchannel", description="Allowlist a channel for /scan.")
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True)
     async def addscanchannel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         guild_id = interaction.guild_id
-        if not guild_id:
-            return
 
         await database.execute_query(
             "INSERT OR IGNORE INTO scan_channels (guild_id, channel_id) VALUES (?, ?)",
@@ -175,12 +175,12 @@ class Moderation(commands.Cog):
         )
         await interaction.response.send_message(f"Channel {channel.mention} added to scan allowlist.", ephemeral=True)
 
+    # default_permissions is a UI hint, not a security boundary
     @app_commands.command(name="removescanchannel", description="Remove a channel from the /scan allowlist.")
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True)
     async def removescanchannel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         guild_id = interaction.guild_id
-        if not guild_id:
-            return
 
         await database.execute_query(
             "DELETE FROM scan_channels WHERE guild_id = ? AND channel_id = ?",
@@ -188,12 +188,15 @@ class Moderation(commands.Cog):
         )
         await interaction.response.send_message(f"Channel {channel.mention} removed from scan allowlist.", ephemeral=True)
 
+    # default_permissions is a UI hint, not a security boundary
     @app_commands.command(name="scan", description="Runs native Python alt/trust analysis on a member.")
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True)
     async def scan(self, interaction: discord.Interaction, member: discord.Member) -> None:
-        guild_id = interaction.guild_id
-        if not guild_id or not interaction.guild:
+        if interaction.guild is None or interaction.guild_id is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
             return
+        guild_id = interaction.guild_id
 
         # Check if channel is allowed
         allowed = await database.fetch_one(

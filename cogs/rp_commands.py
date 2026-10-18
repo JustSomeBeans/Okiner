@@ -925,35 +925,5 @@ class RPCommands(commands.Cog):
         )
         view.message = await interaction.original_response()
 
-    # ------------------------------------------------------------------ #
-    #  Error handler                                                     #
-    # ------------------------------------------------------------------ #
-
-    async def cog_app_command_error(
-        self, interaction: discord.Interaction, error: app_commands.AppCommandError
-    ) -> None:
-        original = getattr(error, "original", error)
-        if isinstance(error, app_commands.MissingPermissions):
-            message = "That one is for mods only."
-        elif isinstance(error, app_commands.NoPrivateMessage):
-            message = "That command only works inside a server."
-        elif isinstance(error, app_commands.CommandOnCooldown):
-            message = (
-                f"That command is cooling down. Try again in {error.retry_after:.1f}s."
-            )
-        else:
-            logging.error(
-                "Unhandled app command error",
-                exc_info=(type(original), original, original.__traceback__),
-            )
-            message = (
-                "Something went wrong while running that command. The error was logged."
-            )
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
-
-
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(RPCommands(bot))
