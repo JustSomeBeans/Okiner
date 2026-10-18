@@ -110,7 +110,7 @@ async def fetch_column(query: str, params: tuple = ()) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
-async def add_marriage(spouse1_id: int, spouse2_id: int, marriage_date: float) -> None:
+async def add_marriage(spouse1_id: int, spouse2_id: int, marriage_date: int) -> None:
     """Atomically create a marriage record with sorted pair, BEGIN IMMEDIATE, and rollback on error."""
     spouse1, spouse2 = sorted([spouse1_id, spouse2_id])
     async with _pool().acquire() as conn:
@@ -127,7 +127,7 @@ async def add_marriage(spouse1_id: int, spouse2_id: int, marriage_date: float) -
             raise
 
 
-async def add_child(child_id: int, parent_id: int, adoption_date: float) -> None:
+async def add_child(child_id: int, parent_id: int, adoption_date: int) -> None:
     """Atomically create an adoption record with cycle detection, BEGIN IMMEDIATE, and rollback on error."""
     async with _pool().acquire() as conn:
         await conn.execute("PRAGMA foreign_keys = ON")

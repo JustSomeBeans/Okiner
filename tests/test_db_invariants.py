@@ -242,11 +242,11 @@ class TestDBInvariants(unittest.IsolatedAsyncioTestCase):
 
     async def test_add_marriage_and_child_helpers(self):
         # 1. Valid marriage and valid adoption succeed
-        await add_marriage(10, 20, "1000")
-        await add_child(100, 10, "1000")
+        await add_marriage(10, 20, 1760000000)
+        await add_child(100, 10, 1760000001)
 
         # 2. Unsorted input (5, 1) is stored sorted as (1, 5)
-        await add_marriage(5, 1, "1000")
+        await add_marriage(5, 1, 1760000002)
         async with self.pool.acquire() as conn:
             cursor = await conn.execute("SELECT spouse1_id, spouse2_id FROM marriages WHERE spouse1_id = 1 OR spouse2_id = 1")
             row = await cursor.fetchone()
@@ -254,18 +254,18 @@ class TestDBInvariants(unittest.IsolatedAsyncioTestCase):
 
         # 3. Bigamy via the real function raises IntegrityError
         with self.assertRaises(sqlite3.IntegrityError):
-            await add_marriage(1, 99, "1000")
+            await add_marriage(1, 99, 1760000003)
 
         # 4. 3-cycle A->B->C->A is rejected on the third add_child
-        await add_child(201, 200, "1000")
-        await add_child(202, 201, "1000")
+        await add_child(201, 200, 1760000004)
+        await add_child(202, 201, 1760000005)
         with self.assertRaises(sqlite3.IntegrityError):
-            await add_child(200, 202, "1000")
+            await add_child(200, 202, 1760000006)
 
         # 5. asyncio.gather of add_marriage(300, 301) and add_marriage(301, 302) yields exactly one success and one IntegrityError
         results = await asyncio.gather(
-            add_marriage(300, 301, "1000"),
-            add_marriage(301, 302, "1000"),
+            add_marriage(300, 301, 1760000007),
+            add_marriage(301, 302, 1760000008),
             return_exceptions=True
         )
         successes = [r for r in results if r is None]
@@ -275,9 +275,26 @@ class TestDBInvariants(unittest.IsolatedAsyncioTestCase):
 
         # 6. After a rejected insert, a following valid insert on the same pool still works (proves no leaked open transaction)
         with self.assertRaises(sqlite3.IntegrityError):
-            await add_marriage(10, 20, "1000") # duplicate/bigamy conflict
+            await add_marriage(10, 20, 1760000009) # duplicate/bigamy conflict
 
-        await add_marriage(400, 401, "1000") # Should succeed
+        await add_marriage(400, 401, 1760000010) # Should succeed
+
+    async def test_text_affinity(self):
+        ts_m = 1760000000
+        ts_c = 1760000001
+        await add_marriage(1, 2, ts_m)
+        await add_child(10, 1, ts_c)
+
+        async with self.pool.acquire() as conn:
+            cursor = await conn.execute("SELECT marriage_date FROM marriages WHERE spouse1_id = 1 AND spouse2_id = 2")
+            m_row = await cursor.fetchone()
+            self.assertEqual(m_row[0], str(ts_m))
+            self.assertIsInstance(m_row[0], str)
+
+            cursor = await conn.execute("SELECT adoption_date FROM children WHERE child_id = 10 AND parent_id = 1")
+            c_row = await cursor.fetchone()
+            self.assertEqual(c_row[0], str(ts_c))
+            self.assertIsInstance(c_row[0], str)
 
     async def test_find_multi_marriage_users(self):
         # (a) A DB containing legacy rows (1, 5) and (5, 9) returns [5]

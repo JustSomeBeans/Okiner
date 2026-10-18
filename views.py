@@ -207,7 +207,7 @@ class MarriageContainer(discord.ui.Container):
         marriage_candidates.sort()
 
         try:
-            await add_marriage(marriage_candidates[0], marriage_candidates[1], time.time())
+            await add_marriage(marriage_candidates[0], marriage_candidates[1], int(time.time()))
         except sqlite3.IntegrityError:
             await interaction.response.send_message(
                 "You or your partner are already married, or a conflicting relationship record exists.",
@@ -319,7 +319,7 @@ class AdoptContainer(discord.ui.Container):
         parent_id = self.original_interaction.user.id
 
         try:
-            await add_child(child_id, parent_id, time.time())
+            await add_child(child_id, parent_id, int(time.time()))
         except sqlite3.IntegrityError:
             await interaction.response.send_message(
                 "You already have a parent or this adoption relationship already exists.",
