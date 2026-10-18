@@ -2,9 +2,13 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock
 import discord
 from discord import app_commands
-from bot import OkinerTree
+from bot import OkinerTree, OkinerBot
 
 class TestOkinerTree(unittest.IsolatedAsyncioTestCase):
+    def test_okiner_bot_wiring(self):
+        bot = OkinerBot()
+        self.assertIsInstance(bot.tree, OkinerTree)
+
     async def test_interaction_check_guild_none_app_command(self):
         interaction = MagicMock(spec=discord.Interaction)
         interaction.guild = None
