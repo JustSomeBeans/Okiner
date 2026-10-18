@@ -213,6 +213,18 @@ class OkinerBot(commands.Bot):
                 )
             await conn.executescript(database.INTEGRITY_TRIGGERS_SQL)
             await conn.commit()
+
+            try:
+                multi_users = await database.find_multi_marriage_users()
+                if multi_users:
+                    preview = multi_users[:20]
+                    logging.warning(
+                        "Found %d users appearing in multiple marriage rows (from before integrity triggers existed; first 20: %s). Manual review required.",
+                        len(multi_users),
+                        preview,
+                    )
+            except Exception:
+                logging.exception("Failed to check for multi-marriage users during startup")
             
         await self.load_extension("cogs.rp_commands")
         await self.load_extension("cogs.family_commands")

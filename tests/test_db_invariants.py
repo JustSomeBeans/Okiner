@@ -1,10 +1,11 @@
 import asyncio
 import tempfile
 import pathlib
+import os
 import sqlite3
 import unittest
 import asqlite
-from database import INTEGRITY_TRIGGERS_SQL, add_marriage, add_child, set_bot
+from database import INTEGRITY_TRIGGERS_SQL, add_marriage, add_child, find_multi_marriage_users, set_bot
 
 class StubBot:
     def __init__(self, db_pool):
@@ -13,13 +14,14 @@ class StubBot:
 class TestDBInvariants(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.db_fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(self.db_fd)
         self.pool = await asqlite.create_pool(self.db_path)
         self.stub_bot = StubBot(self.pool)
         set_bot(self.stub_bot)
 
         async with self.pool.acquire() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
-            schema_path = pathlib.Path("rp_schema.sql")
+            schema_path = pathlib.Path(__file__).resolve().parent.parent / "rp_schema.sql"
             await conn.executescript(schema_path.read_text(encoding="utf-8"))
             await conn.executescript(INTEGRITY_TRIGGERS_SQL)
             await conn.commit()
@@ -276,6 +278,55 @@ class TestDBInvariants(unittest.IsolatedAsyncioTestCase):
             await add_marriage(10, 20, "1000") # duplicate/bigamy conflict
 
         await add_marriage(400, 401, "1000") # Should succeed
+
+    async def test_find_multi_marriage_users(self):
+        # (a) A DB containing legacy rows (1, 5) and (5, 9) returns [5]
+        async with self.pool.acquire() as conn:
+            await conn.executescript("""
+                DROP TRIGGER IF EXISTS trg_marriages_ordering;
+                DROP TRIGGER IF EXISTS trg_marriages_bigamy;
+                DROP TRIGGER IF EXISTS trg_marriages_parent_child;
+                DELETE FROM marriages;
+                INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (1, 5, '1000');
+                INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (5, 9, '1000');
+            """)
+            await conn.executescript(INTEGRITY_TRIGGERS_SQL)
+            await conn.commit()
+
+        multi = await find_multi_marriage_users()
+        self.assertEqual(multi, [5])
+
+        # (b) A clean DB returns []
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM marriages")
+            await conn.commit()
+
+        multi_clean = await find_multi_marriage_users()
+        self.assertEqual(multi_clean, [])
+
+        # (c) The function does not change the marriages row count
+        async with self.pool.acquire() as conn:
+            await conn.executescript("""
+                DROP TRIGGER IF EXISTS trg_marriages_ordering;
+                DROP TRIGGER IF EXISTS trg_marriages_bigamy;
+                DROP TRIGGER IF EXISTS trg_marriages_parent_child;
+                DELETE FROM marriages;
+                INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (1, 2, '1000');
+                INSERT INTO marriages (spouse1_id, spouse2_id, marriage_date) VALUES (3, 4, '1000');
+            """)
+            await conn.executescript(INTEGRITY_TRIGGERS_SQL)
+            await conn.commit()
+            
+            cursor = await conn.execute("SELECT COUNT(*) FROM marriages")
+            count_before = (await cursor.fetchone())[0]
+
+        _ = await find_multi_marriage_users()
+
+        async with self.pool.acquire() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM marriages")
+            count_after = (await cursor.fetchone())[0]
+
+        self.assertEqual(count_before, count_after)
 
 if __name__ == "__main__":
     unittest.main()

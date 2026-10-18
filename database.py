@@ -161,6 +161,26 @@ async def add_child(child_id: int, parent_id: int, adoption_date: float) -> None
             raise
 
 
+async def find_multi_marriage_users() -> list[int]:
+    """Find users appearing in more than one marriage row."""
+    async with _pool().acquire() as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        cursor = await conn.execute(
+            """
+            SELECT uid FROM (
+                SELECT spouse1_id AS uid FROM marriages
+                UNION ALL
+                SELECT spouse2_id AS uid FROM marriages
+            )
+            GROUP BY uid
+            HAVING COUNT(*) > 1
+            ORDER BY uid
+            """
+        )
+        rows = await cursor.fetchall()
+        return [int(row[0]) for row in rows]
+
+
 async def rp_type_exists(guild_id: int, rp_type: str) -> bool:
     """Return True if the given RP type exists for this guild."""
     row = await fetch_one(
