@@ -5,7 +5,6 @@ import discord
 
 FACTOR_LABELS = {
     "age": "Account age",
-    "status": "Presence",
     "activity": "Activity",
     "usernameWords": "Username",
     "usernameSymbols": "Username ending",
@@ -60,11 +59,6 @@ def calculate_alt_score(member: discord.Member | discord.User) -> dict:
     # Booster score (if member)
     booster_score = 1 if isinstance(member, discord.Member) and member.premium_since else 0
 
-    # Status / presence score (if member)
-    status_score = 0
-    if isinstance(member, discord.Member) and hasattr(member, "status") and member.status and member.status != discord.Status.offline:
-        status_score = 1
-
     # Username heuristics
     username = member.name
     username_symbols_score = 0
@@ -79,7 +73,6 @@ def calculate_alt_score(member: discord.Member | discord.User) -> dict:
 
     categories = {
         "age": age_score,
-        "status": status_score,
         "activity": 0,
         "usernameWords": 0,
         "usernameSymbols": username_symbols_score,

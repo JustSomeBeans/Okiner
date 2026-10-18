@@ -28,22 +28,20 @@ APPLICATION_ID = os.getenv("DISCORD_APPLICATION_ID")
 # APPLICATION_ID is optional — without it the bot still works, it just won't log an invite URL at startup.
 
 intents = discord.Intents.default()
-intents.presences = True
-intents.members = True
-intents.message_content = True
+intents.presences = False  # not needed
+intents.members = True     # member lookup/autocomplete and join data
+intents.message_content = True  # emoji tracking and the oki!sync prefix command
 
 requested_permissions = discord.Permissions(
-    add_reactions=True,
     attach_files=True,
-    change_nickname=True,
     embed_links=True,
     send_messages=True,
     send_messages_in_threads=True,
     use_external_emojis=True,
-    use_external_stickers=True,
     use_application_commands=True,
-    view_audit_log=True,
     view_channel=True,
+    ban_members=True,
+    manage_messages=True,
 )
 
 
