@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import sqlite3
 
 import discord
 from discord import app_commands
@@ -62,6 +63,36 @@ from views import ActionTextConfirmView, AddRPOptionsView, EditRPOptionsView, Ma
 
 TARGET_MENTION_RE = re.compile(r"<@!?(\d+)>")
 ALLOWED_COLUMNS = {"texts", "action_texts"} # guard against SQL injection in _fetch_case_entries
+
+
+def build_rp_payload(
+    image_url: str | None,
+    std_text: str | None,
+    std_action: str | None,
+    case_mode: str,
+    self_text: str | None,
+    null_text: str | None,
+) -> list[dict]:
+    """Build the full entries payload for all case types without touching Discord objects."""
+    entries = []
+    if image_url and image_url.strip():
+        entries.append({"case_type": STANDARD_CASE, "url": image_url.strip(), "text": None, "action_text": None})
+    if std_text and std_text.strip():
+        entries.append({"case_type": STANDARD_CASE, "url": None, "text": std_text.strip(), "action_text": None})
+    if std_action and std_action.strip():
+        entries.append({"case_type": STANDARD_CASE, "url": None, "text": None, "action_text": std_action.strip()})
+
+    if case_mode in {"self", "standard_self_null"}:
+        if self_text and self_text.strip():
+            st = self_text.strip()
+            if len(st) <= MAX_TEXT_LENGTH:
+                entries.append({"case_type": SELF_CASE, "url": None, "text": st, "action_text": None})
+    if case_mode in {"null", "standard_self_null"}:
+        if null_text and null_text.strip():
+            nt = null_text.strip()
+            if len(nt) <= MAX_TEXT_LENGTH:
+                entries.append({"case_type": NULL_CASE, "url": None, "text": nt, "action_text": None})
+    return entries
 
 
 async def send_chunked_response(
@@ -717,22 +748,19 @@ class RPCommands(commands.Cog):
             )
             return
 
-        await database.add_rp_type(interaction.guild_id, rp_type)
+        if case_mode in {"self", "standard_self_null"} and self_text and len(self_text.strip()) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Selfcase text must be at most {MAX_TEXT_LENGTH} characters.", ephemeral=True
+            )
+            return
 
-        await database.add_rp_entry(
-            interaction.user.id,
-            interaction.guild_id,
-            rp_type,
-            case_type=STANDARD_CASE,
-            url=image_url,
-        )
-        await database.add_rp_entry(
-            interaction.user.id,
-            interaction.guild_id,
-            rp_type,
-            case_type=STANDARD_CASE,
-            text=std_text,
-        )
+        if case_mode in {"null", "standard_self_null"} and null_text and len(null_text.strip()) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Nullcase text must be at most {MAX_TEXT_LENGTH} characters.", ephemeral=True
+            )
+            return
+
+        entries = build_rp_payload(image_url, std_text, std_action, case_mode, self_text, null_text)
 
         missing_std = [
             tag
@@ -740,6 +768,21 @@ class RPCommands(commands.Cog):
             if tag not in std_action and tag.replace("}", "_name}") not in std_action
         ]
         if missing_std:
+            async def on_confirm(inter: discord.Interaction) -> None:
+                try:
+                    await database.create_rp_type_with_entries(
+                        inter.guild_id, inter.user.id, rp_type, entries
+                    )
+                    await inter.response.edit_message(
+                        content=f"Added standard action text to `{rp_type}` despite missing tags.",
+                        view=None,
+                    )
+                except sqlite3.IntegrityError:
+                    await inter.response.edit_message(
+                        content="That RP type already exists.",
+                        view=None,
+                    )
+
             warning = (
                 f"Warning: your standard action text is missing the following dynamic tags: {', '.join(f'`{tag}`' for tag in missing_std)}.\n\n"
                 "Do you want to add it anyway?"
@@ -750,47 +793,25 @@ class RPCommands(commands.Cog):
                 rp_type,
                 std_action,
                 case_type=STANDARD_CASE,
+                on_confirm=on_confirm,
             )
             await interaction.response.send_message(warning, view=view, ephemeral=True)
             view.message = await interaction.original_response()
             return
 
-        await database.add_rp_entry(
-            interaction.user.id,
-            interaction.guild_id,
-            rp_type,
-            case_type=STANDARD_CASE,
-            action_text=std_action,
-        )
-
-        if case_mode in {"self", "standard_self_null"}:
-            if self_text and self_text.strip():
-                st = self_text.strip()
-                if len(st) <= MAX_TEXT_LENGTH:
-                    await database.add_rp_entry(
-                        interaction.user.id,
-                        interaction.guild_id,
-                        rp_type,
-                        case_type=SELF_CASE,
-                        text=st,
-                    )
-
-        if case_mode in {"null", "standard_self_null"}:
-            if null_text and null_text.strip():
-                nt = null_text.strip()
-                if len(nt) <= MAX_TEXT_LENGTH:
-                    await database.add_rp_entry(
-                        interaction.user.id,
-                        interaction.guild_id,
-                        rp_type,
-                        case_type=NULL_CASE,
-                        text=nt,
-                    )
-
-        await interaction.response.send_message(
-            f"Successfully created RP type `{rp_type}`!",
-            ephemeral=True,
-        )
+        try:
+            await database.create_rp_type_with_entries(
+                interaction.guild_id, interaction.user.id, rp_type, entries
+            )
+            await interaction.response.send_message(
+                f"Successfully created RP type `{rp_type}`!",
+                ephemeral=True,
+            )
+        except sqlite3.IntegrityError:
+            await interaction.response.send_message(
+                "That RP type already exists. Use `/edit_rp` instead.",
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="edit_rp",

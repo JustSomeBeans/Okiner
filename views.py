@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 # =============================================================================
 # views.py — Discord UI components (discord.ui.View subclasses)
@@ -35,6 +35,7 @@ class ActionTextConfirmView(discord.ui.View):
         action_text: str,
         *,
         case_type: str = "standard",
+        on_confirm: Callable[[discord.Interaction], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(timeout=60)
         self.user_id = user_id
@@ -42,6 +43,7 @@ class ActionTextConfirmView(discord.ui.View):
         self.rp_type = rp_type
         self.action_text = action_text
         self.case_type = case_type
+        self.on_confirm = on_confirm
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -72,23 +74,34 @@ class ActionTextConfirmView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         """Save the action text anyway after the user confirms the warning."""
-        await add_rp_entry(
-            self.user_id,
-            self.guild_id,
-            self.rp_type,
-            case_type=self.case_type,
-            action_text=self.action_text,
-        )
-        await interaction.response.edit_message(
-            content=f"Added {self.case_type} action text to `{self.rp_type}` despite missing tags.",
-            view=None,
-        )
+        self.stop()
+        if self.on_confirm is not None:
+            await self.on_confirm(interaction)
+        else:
+            try:
+                await add_rp_entry(
+                    self.user_id,
+                    self.guild_id,
+                    self.rp_type,
+                    case_type=self.case_type,
+                    action_text=self.action_text,
+                )
+                await interaction.response.edit_message(
+                    content=f"Added {self.case_type} action text to `{self.rp_type}` despite missing tags.",
+                    view=None,
+                )
+            except sqlite3.IntegrityError:
+                await interaction.response.edit_message(
+                    content="That RP type no longer exists.",
+                    view=None,
+                )
 
     @discord.ui.button(label="No, Cancel", style=discord.ButtonStyle.red)
     async def cancel(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         """Close the prompt without saving anything."""
+        self.stop()
         await interaction.response.edit_message(
             content="Action text addition cancelled.", view=None
         )
