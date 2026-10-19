@@ -198,6 +198,54 @@ async def add_rp_type(guild_id: int, rp_type: str) -> None:
     )
 
 
+async def create_rp_type_with_entries(
+    guild_id: int, user_id: int, rp_type: str, entries: list[dict]
+) -> None:
+    """Atomically create an RP type and its entries within a single BEGIN IMMEDIATE transaction."""
+    seen = set()
+    deduped_entries = []
+    for entry in entries:
+        key = (
+            entry.get("case_type"),
+            entry.get("url"),
+            entry.get("text"),
+            entry.get("action_text"),
+        )
+        if key not in seen:
+            seen.add(key)
+            deduped_entries.append(entry)
+
+    async with _pool().acquire() as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            await conn.execute(
+                "INSERT INTO rp_types (guild_id, type) VALUES (?, ?)",
+                (guild_id, rp_type),
+            )
+            for entry in deduped_entries:
+                await conn.execute(
+                    """
+                    INSERT INTO roleplay_entries
+                        (user_id, guild_id, type, case_type, url, texts, action_texts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        guild_id,
+                        rp_type,
+                        entry.get("case_type"),
+                        entry.get("url"),
+                        entry.get("text"),
+                        entry.get("action_text"),
+                    ),
+                )
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
+
+
 async def add_rp_entry(
     user_id: int,
     guild_id: int,
