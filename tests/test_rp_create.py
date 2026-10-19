@@ -45,8 +45,8 @@ class TestRPCreate(unittest.IsolatedAsyncioTestCase):
             cursor = await conn.execute("SELECT 1 FROM rp_types WHERE guild_id = ? AND type = ?", (guild_id, rp_type))
             self.assertIsNotNone(await cursor.fetchone())
 
-            # Check entries
-            cursor = await conn.execute("SELECT case_type, url, texts, action_texts FROM roleplay_entries WHERE guild_id = ? AND type = ?", (guild_id, rp_type))
+            # Check entries with ORDER BY rowid
+            cursor = await conn.execute("SELECT case_type, url, texts, action_texts FROM roleplay_entries WHERE guild_id = ? AND type = ? ORDER BY rowid", (guild_id, rp_type))
             rows = await cursor.fetchall()
             self.assertEqual(len(rows), 3)
             self.assertEqual(tuple(rows[0]), ("standard", "https://i.imgur.com/a.png", None, None))
@@ -107,9 +107,18 @@ class TestRPCreate(unittest.IsolatedAsyncioTestCase):
         guild_id = 100
         user_id = 200
         rp_type = "smile"
+        payload_a = [
+            {"case_type": "standard", "url": None, "text": "smiles A1", "action_text": None},
+            {"case_type": "standard", "url": None, "text": "smiles A2", "action_text": None},
+        ]
+        payload_b = [
+            {"case_type": "standard", "url": None, "text": "smiles B1", "action_text": None},
+            {"case_type": "standard", "url": None, "text": "smiles B2", "action_text": None},
+            {"case_type": "standard", "url": None, "text": "smiles B3", "action_text": None},
+        ]
         results = await asyncio.gather(
-            create_rp_type_with_entries(guild_id, user_id, rp_type, [{"case_type": "standard", "url": None, "text": "smiles A", "action_text": None}]),
-            create_rp_type_with_entries(guild_id, user_id, rp_type, [{"case_type": "standard", "url": None, "text": "smiles B", "action_text": None}]),
+            create_rp_type_with_entries(guild_id, user_id, rp_type, payload_a),
+            create_rp_type_with_entries(guild_id, user_id, rp_type, payload_b),
             return_exceptions=True
         )
         successes = [r for r in results if r is None]
@@ -118,10 +127,14 @@ class TestRPCreate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(errors), 1)
 
         async with self.pool.acquire() as conn:
-            cursor = await conn.execute("SELECT texts FROM roleplay_entries WHERE guild_id = ? AND type = ?", (guild_id, rp_type))
+            cursor = await conn.execute("SELECT texts FROM roleplay_entries WHERE guild_id = ? AND type = ? ORDER BY rowid", (guild_id, rp_type))
             rows = await cursor.fetchall()
-            self.assertEqual(len(rows), 1)
-            self.assertIn(rows[0][0], ["smiles A", "smiles B"])
+            texts = [r[0] for r in rows]
+            # Must be exactly all of A or exactly all of B, never a mix, and loser left nothing behind
+            if texts[0].startswith("smiles A"):
+                self.assertEqual(texts, ["smiles A1", "smiles A2"])
+            else:
+                self.assertEqual(texts, ["smiles B1", "smiles B2", "smiles B3"])
 
     async def test_no_leaked_transaction_after_failure(self):
         guild_id = 100
