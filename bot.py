@@ -117,14 +117,11 @@ class OkinerBot(commands.Bot):
         self.db_pool: asqlite.Pool | None = None
 
     async def setup_hook(self) -> None:
-        self.db_pool = await asqlite.create_pool(DB_PATH)
+        self.db_pool = await asqlite.create_pool(DB_PATH, init=database.init_connection)
         database.set_bot(self)
+        await database.assert_connection_pragmas()
 
         async with self.db_pool.acquire() as conn:
-            # Enable foreign key enforcement — SQLite has it off by default.
-            # We also do this per-connection in execute_query, but doing it here
-            # ensures the schema creation itself (with the FK definition) is consistent.
-            await conn.execute("PRAGMA foreign_keys = ON")
             # executescript runs the full SQL file — safe to call every startup
             # because every table uses CREATE TABLE IF NOT EXISTS.
             await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))

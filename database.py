@@ -71,6 +71,37 @@ END;
 """
 
 
+def init_connection(conn: sqlite3.Connection) -> None:
+    """Configure connection PRAGMAs on every pooled connection."""
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+
+
+async def assert_connection_pragmas() -> None:
+    """Assert that acquired pool connections have required PRAGMAs set correctly."""
+    async with _pool().acquire() as conn:
+        cursor = await conn.execute("PRAGMA foreign_keys")
+        row = await cursor.fetchone()
+        fk = row[0] if row else 0
+
+        cursor = await conn.execute("PRAGMA busy_timeout")
+        row = await cursor.fetchone()
+        bt = row[0] if row else 0
+
+        cursor = await conn.execute("PRAGMA journal_mode")
+        row = await cursor.fetchone()
+        jm = row[0] if row else ""
+
+        cursor = await conn.execute("PRAGMA synchronous")
+        row = await cursor.fetchone()
+        sync = row[0] if row else 0
+
+        if fk != 1 or bt < 5000 or str(jm).lower() != "wal" or sync != 1:
+            raise RuntimeError(f"Connection pragmas invalid: foreign_keys={fk}, busy_timeout={bt}, journal_mode={jm}, synchronous={sync}")
+
+
 def set_bot(bot: "OkinerBot") -> None:
     """Wire the database module to the running bot instance."""
     global _bot
@@ -86,9 +117,7 @@ def _pool():
 async def execute_query(query: str, params: tuple = ()) -> None:
     """Run a write query and commit it right away."""
     async with _pool().acquire() as conn:
-        # asqlite connections don't inherit PRAGMAs from the pool-level setup,
-        # so we re-enable foreign keys on every acquired connection to be safe.
-        await conn.execute("PRAGMA foreign_keys = ON")
+        # PRAGMAs are applied by init_connection on every pooled connection.
         await conn.execute(query, params)
         await conn.commit()
 
@@ -96,7 +125,6 @@ async def execute_query(query: str, params: tuple = ()) -> None:
 async def execute_write(query: str, params: tuple = ()) -> int:
     """Run one write statement in a BEGIN IMMEDIATE transaction; return cursor.rowcount."""
     async with _pool().acquire() as conn:
-        await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute("BEGIN IMMEDIATE")
         try:
             cursor = await conn.execute(query, params)
@@ -111,7 +139,6 @@ async def execute_write(query: str, params: tuple = ()) -> int:
 async def fetch_one(query: str, params: tuple = ()) -> tuple | None:
     """Fetch a single database row."""
     async with _pool().acquire() as conn:
-        await conn.execute("PRAGMA foreign_keys = ON")
         result = await conn.execute(query, params)
         return await result.fetchone()
 
@@ -119,7 +146,6 @@ async def fetch_one(query: str, params: tuple = ()) -> tuple | None:
 async def fetch_column(query: str, params: tuple = ()) -> list[str]:
     """Fetch the first column from all returned rows as a plain string list."""
     async with _pool().acquire() as conn:
-        await conn.execute("PRAGMA foreign_keys = ON")
         result = await conn.execute(query, params)
         rows = await result.fetchall()
     return [str(row[0]) for row in rows]
@@ -129,7 +155,6 @@ async def add_marriage(spouse1_id: int, spouse2_id: int, marriage_date: int) -> 
     """Atomically create a marriage record with sorted pair, BEGIN IMMEDIATE, and rollback on error."""
     spouse1, spouse2 = sorted([spouse1_id, spouse2_id])
     async with _pool().acquire() as conn:
-        await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute("BEGIN IMMEDIATE")
         try:
             await conn.execute(
@@ -145,7 +170,6 @@ async def add_marriage(spouse1_id: int, spouse2_id: int, marriage_date: int) -> 
 async def add_child(child_id: int, parent_id: int, adoption_date: int) -> None:
     """Atomically create an adoption record with cycle detection, BEGIN IMMEDIATE, and rollback on error."""
     async with _pool().acquire() as conn:
-        await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute("BEGIN IMMEDIATE")
         try:
             cursor = await conn.execute(
@@ -179,7 +203,6 @@ async def add_child(child_id: int, parent_id: int, adoption_date: int) -> None:
 async def find_multi_marriage_users() -> list[int]:
     """Find users appearing in more than one marriage row."""
     async with _pool().acquire() as conn:
-        await conn.execute("PRAGMA foreign_keys = ON")
         cursor = await conn.execute(
             """
             SELECT uid FROM (
@@ -231,7 +254,6 @@ async def create_rp_type_with_entries(
             deduped_entries.append(entry)
 
     async with _pool().acquire() as conn:
-        await conn.execute("PRAGMA foreign_keys = ON")
         await conn.execute("BEGIN IMMEDIATE")
         try:
             await conn.execute(
