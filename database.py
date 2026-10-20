@@ -93,6 +93,21 @@ async def execute_query(query: str, params: tuple = ()) -> None:
         await conn.commit()
 
 
+async def execute_write(query: str, params: tuple = ()) -> int:
+    """Run one write statement in a BEGIN IMMEDIATE transaction; return cursor.rowcount."""
+    async with _pool().acquire() as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await conn.execute(query, params)
+            count = cursor.get_cursor().rowcount
+            await conn.commit()
+            return count
+        except BaseException:
+            await conn.rollback()
+            raise
+
+
 async def fetch_one(query: str, params: tuple = ()) -> tuple | None:
     """Fetch a single database row."""
     async with _pool().acquire() as conn:

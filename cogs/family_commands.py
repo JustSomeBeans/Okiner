@@ -5,7 +5,7 @@ import networkx as nx
 from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageDraw, ImageFont
-from database import add_rp_entry, execute_query, fetch_one
+from database import add_rp_entry, execute_write, fetch_one
 from views import MarriageConfirmView, AdoptionConfirmView
 
 BACKGROUND_COLOR = (248, 250, 252)
@@ -390,8 +390,12 @@ class FamilyCommands(commands.Cog):
             await interaction.response.send_message(f"You're not married with **{user.display_name}**!")
             return
 
+        rowcount = await execute_write("DELETE FROM marriages WHERE spouse1_id = ? AND spouse2_id = ?", (divorce_user_ids[0], divorce_user_ids[1]))
+        if rowcount == 0:
+            await interaction.response.send_message(f"You're no longer married to **{user.display_name}**.")
+            return
+
         await interaction.response.send_message(f"</3 {user.mention}, I'm sorry to say, but {interaction.user.mention} has decided to divorce you...")
-        await execute_query("DELETE FROM marriages WHERE spouse1_id = ? AND spouse2_id = ?", (divorce_user_ids[0], divorce_user_ids[1]))
     
     @app_commands.command(name="adopt", description="Adopt a user as your child.")
     @app_commands.guild_only()
@@ -446,8 +450,12 @@ class FamilyCommands(commands.Cog):
             await interaction.response.send_message(f"The user **{user.display_name}** is not your child!")
             return
         
+        rowcount = await execute_write("DELETE FROM children WHERE child_id = ? AND parent_id = ?", (disowned_id, disowner_id))
+        if rowcount == 0:
+            await interaction.response.send_message(f"**{user.display_name}** is no longer your child.")
+            return
+
         await interaction.response.send_message(f"</3 {user.mention}, I'm sorry to say, but {interaction.user.mention} has decided to disown you...")
-        await execute_query("DELETE FROM children WHERE child_id = ? AND parent_id = ?", (disowned_id, disowner_id))
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(FamilyCommands(bot))
