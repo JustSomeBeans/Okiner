@@ -250,12 +250,12 @@ class TestFamilyDivorceDisown(unittest.IsolatedAsyncioTestCase):
         stub_bot = StubBot(pool)
         set_bot(stub_bot)
         try:
-            with self.assertRaises(sqlite3.IntegrityError):
-                await execute_write("INSERT INTO marriages (spouse1_id, spouse2_id) VALUES (?, ?)", (2, 2))
-
             async with pool.acquire() as conn:
                 await conn.execute("INSERT INTO marriages (spouse1_id, spouse2_id) VALUES (9, 10)")
                 await conn.commit()
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                await execute_write("INSERT INTO marriages (spouse1_id, spouse2_id) VALUES (?, ?)", (2, 2))
 
             rowcount = await execute_write("DELETE FROM marriages WHERE spouse1_id = ? AND spouse2_id = ?", (9, 10))
             self.assertEqual(rowcount, 1)
