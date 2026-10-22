@@ -6,6 +6,7 @@ from __future__ import annotations
 # Imported by:  main.py    → OkinerBot
 # Imports from: config.py  → DB_PATH, SCHEMA_PATH
 #               database.py → set_bot  (called in setup_hook to wire the pool)
+#               migrations.py → run_migrations (called in setup_hook)
 #               discord    → discord.Intents, discord.Permissions
 #               discord.ext.commands → commands.Bot
 #               asqlite    → asqlite.Pool, asqlite.create_pool
@@ -13,6 +14,7 @@ from __future__ import annotations
 # Loads extension: cogs.rp_commands  (registered in setup_hook)
 # =============================================================================
 
+import asyncio
 import logging
 import os
 from urllib.parse import urlencode
@@ -23,6 +25,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import database
+import migrations
 from config import DB_PATH, SCHEMA_PATH
 
 APPLICATION_ID = os.getenv("DISCORD_APPLICATION_ID")
@@ -117,165 +120,31 @@ class OkinerBot(commands.Bot):
         self.db_pool: asqlite.Pool | None = None
 
     async def setup_hook(self) -> None:
+        schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
+        applied = await asyncio.to_thread(migrations.run_migrations, DB_PATH, schema_sql)
+        if applied:
+            logging.info("Applied database migrations: %s", applied)
+
         self.db_pool = await asqlite.create_pool(DB_PATH, init=database.init_connection)
         database.set_bot(self)
         await database.assert_connection_pragmas()
 
-        async with self.db_pool.acquire() as conn:
-            # executescript runs the full SQL file — safe to call every startup
-            # because every table uses CREATE TABLE IF NOT EXISTS.
-            await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-            await conn.executescript(
-                """
-                DROP TRIGGER IF EXISTS trg_marriages_ordering;
-                DROP TRIGGER IF EXISTS trg_marriages_bigamy;
-                DROP TRIGGER IF EXISTS trg_marriages_parent_child;
-                DROP TRIGGER IF EXISTS trg_children_self;
-                DROP TRIGGER IF EXISTS trg_children_reverse;
-                DROP TRIGGER IF EXISTS trg_children_spouse;
-                """
-            )
-            table_info = await conn.execute("PRAGMA table_info(roleplay_entries)")
-            columns = {row[1] for row in await table_info.fetchall()}
-            if "case_type" not in columns:
-                await conn.executescript(
-                    """
-                    ALTER TABLE roleplay_entries RENAME TO roleplay_entries_legacy;
-
-                    CREATE TABLE roleplay_entries (
-                        user_id INTEGER NOT NULL,
-                        guild_id INTEGER NOT NULL,
-                        type TEXT NOT NULL,
-                        case_type TEXT NOT NULL DEFAULT 'standard',
-                        url TEXT,
-                        texts TEXT,
-                        action_texts TEXT,
-                        PRIMARY KEY (user_id, guild_id, type, case_type, url, texts, action_texts),
-                        FOREIGN KEY (guild_id, type)
-                            REFERENCES rp_types(guild_id, type)
-                            ON DELETE CASCADE
-                    );
-
-                    INSERT INTO roleplay_entries (user_id, guild_id, type, case_type, url, texts, action_texts)
-                    SELECT user_id, guild_id, type, 'standard', url, texts, action_texts
-                    FROM roleplay_entries_legacy;
-
-                    DROP TABLE roleplay_entries_legacy;
-                    """
+        try:
+            multi_users = await database.find_multi_marriage_users()
+            if multi_users:
+                preview = multi_users[:20]
+                logging.warning(
+                    "Found %d users appearing in multiple marriage rows (from before integrity triggers existed; first 20: %s). Manual review required.",
+                    len(multi_users),
+                    preview,
                 )
+        except Exception:
+            logging.exception("Failed to check for multi-marriage users during startup")
 
-            legacy_self = await conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='rp_self_cases'"
-            )
-            if await legacy_self.fetchone():
-                await conn.executescript(
-                    """
-                    INSERT OR IGNORE INTO roleplay_entries
-                        (user_id, guild_id, type, case_type, url, texts, action_texts)
-                    SELECT
-                        0, -- Placeholder for missing user_id in legacy table
-                        guild_id,
-                        type,
-                        'selfcase',
-                        url,
-                        texts,
-                        action_texts
-                    FROM rp_self_cases;
-
-                    DROP TABLE rp_self_cases;
-                    """
-                )
-
-            children_table_info = await conn.execute("PRAGMA table_info(children)")
-            children_columns = {row[1] for row in await children_table_info.fetchall()}
-            children_indexes = await conn.execute("PRAGMA index_list(children)")
-            children_index_rows = await children_indexes.fetchall()
-            parent_unique = False
-            for index_row in children_index_rows:
-                if not index_row[2]:
-                    continue
-                index_name = index_row[1]
-                index_info = await conn.execute(f"PRAGMA index_info({index_name!r})")
-                indexed_columns = [row[2] for row in await index_info.fetchall()]
-                if indexed_columns == ["parent_id"]:
-                    parent_unique = True
-                    break
-            if children_columns and parent_unique:
-                await conn.executescript(
-                    """
-                    ALTER TABLE children RENAME TO children_legacy;
-
-                    CREATE TABLE children (
-                        offspring_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        child_id INTEGER UNIQUE NOT NULL,
-                        parent_id INTEGER NOT NULL,
-                        adoption_date TEXT
-                    );
-
-                    INSERT INTO children (offspring_id, child_id, parent_id, adoption_date)
-                    SELECT offspring_id, child_id, parent_id, adoption_date
-                    FROM children_legacy;
-
-                    DROP TABLE children_legacy;
-                    """
-                )
-
-            marriages_table_info = await conn.execute("PRAGMA table_info(marriages)")
-            marriages_columns = {row[1] for row in await marriages_table_info.fetchall()}
-            marriages_indexes = await conn.execute("PRAGMA index_list(marriages)")
-            marriages_index_rows = await marriages_indexes.fetchall()
-            spouse1_unique = False
-            spouse2_unique = False
-            for index_row in marriages_index_rows:
-                if not index_row[2]:
-                    continue
-                index_name = index_row[1]
-                index_info = await conn.execute(f"PRAGMA index_info({index_name!r})")
-                indexed_columns = [row[2] for row in await index_info.fetchall()]
-                if indexed_columns == ["spouse1_id"]:
-                    spouse1_unique = True
-                if indexed_columns == ["spouse2_id"]:
-                    spouse2_unique = True
-            if marriages_columns and (not spouse1_unique or not spouse2_unique):
-                await conn.executescript(
-                    """
-                    ALTER TABLE marriages RENAME TO marriages_legacy;
-
-                    CREATE TABLE marriages (
-                        marriage_id INTEGER PRIMARY KEY,
-                        spouse1_id INTEGER UNIQUE NOT NULL,
-                        spouse2_id INTEGER UNIQUE NOT NULL,
-                        marriage_date TEXT,
-                        UNIQUE (spouse1_id, spouse2_id)
-                    );
-
-                    INSERT INTO marriages (marriage_id, spouse1_id, spouse2_id, marriage_date)
-                    SELECT marriage_id, spouse1_id, spouse2_id, marriage_date
-                    FROM marriages_legacy;
-
-                    DROP TABLE marriages_legacy;
-                    """
-                )
-            await conn.executescript(database.INTEGRITY_TRIGGERS_SQL)
-            await conn.commit()
-
-            try:
-                multi_users = await database.find_multi_marriage_users()
-                if multi_users:
-                    preview = multi_users[:20]
-                    logging.warning(
-                        "Found %d users appearing in multiple marriage rows (from before integrity triggers existed; first 20: %s). Manual review required.",
-                        len(multi_users),
-                        preview,
-                    )
-            except Exception:
-                logging.exception("Failed to check for multi-marriage users during startup")
-            
         await self.load_extension("cogs.rp_commands")
         await self.load_extension("cogs.family_commands")
         await self.load_extension("cogs.moderation")
         await self.load_extension("cogs.behavior")
-
 
     async def close(self) -> None:
         if self.db_pool is not None:

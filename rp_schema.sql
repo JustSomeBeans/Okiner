@@ -20,17 +20,7 @@ CREATE TABLE IF NOT EXISTS roleplay_entries (
         ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS rp_self_cases (
-    guild_id INTEGER NOT NULL,
-    type TEXT NOT NULL,
-    texts TEXT,
-    action_texts TEXT,
-    url TEXT,
-    PRIMARY KEY (guild_id, type),
-    FOREIGN KEY (guild_id, type)
-        REFERENCES rp_types(guild_id, type)
-        ON DELETE CASCADE
-);
+
 
 CREATE TABLE IF NOT EXISTS children (
     offspring_id INTEGER PRIMARY KEY AUTOINCREMENT, 
