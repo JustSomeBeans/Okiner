@@ -292,9 +292,9 @@ async def add_rp_entry(
     text: str | None = None,
     action_text: str | None = None,
     url: str | None = None,
-) -> None:
-    """Store an entry tied to a server RP type."""
-    await execute_query(
+) -> bool:
+    """Store an entry tied to a server RP type. True if a row was inserted, False if an identical entry already existed."""
+    rowcount = await execute_write(
         """
         INSERT OR IGNORE INTO roleplay_entries
             (user_id, guild_id, type, case_type, url, texts, action_texts)
@@ -302,6 +302,7 @@ async def add_rp_entry(
         """,
         (user_id, guild_id, rp_type, case_type, url, text, action_text),
     )
+    return rowcount > 0
 
 
 async def remove_rp_entry(

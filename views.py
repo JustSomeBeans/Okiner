@@ -79,13 +79,19 @@ class ActionTextConfirmView(discord.ui.View):
             await self.on_confirm(interaction)
         else:
             try:
-                await add_rp_entry(
+                added = await add_rp_entry(
                     self.user_id,
                     self.guild_id,
                     self.rp_type,
                     case_type=self.case_type,
                     action_text=self.action_text,
                 )
+                if not added:
+                    await interaction.response.edit_message(
+                        content="That action text is already saved for this RP type.",
+                        view=None,
+                    )
+                    return
                 await interaction.response.edit_message(
                     content=f"Added {self.case_type} action text to `{self.rp_type}` despite missing tags.",
                     view=None,
@@ -887,6 +893,8 @@ class EditEntryModal(discord.ui.Modal):
             idx = self.browser_view.entries.index(self.old_entry)
             self.browser_view.entries[idx] = new_value
             await interaction.response.edit_message(content=self.browser_view.render_content(), view=self.browser_view)
+        except sqlite3.IntegrityError:
+            await interaction.response.send_message("That value already exists for this RP type.", ephemeral=True)
         except Exception:
             logging.exception("Failed to update RP entry")
             await interaction.response.send_message("Failed to update entry due to database error.", ephemeral=True)

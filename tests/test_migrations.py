@@ -9,6 +9,10 @@ from migrations import run_migrations, split_statements, MIGRATIONS
 from database import INTEGRITY_TRIGGERS_SQL
 
 
+def _next_version():
+    return max(v for v, _ in MIGRATIONS) + 1
+
+
 class TestMigrations(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -40,12 +44,12 @@ class TestMigrations(unittest.TestCase):
     # 1. Fresh empty DB
     def test_fresh_empty_db(self):
         applied = run_migrations(self.db_path, self.schema_sql)
-        self.assertEqual(applied, [1])
+        self.assertEqual(applied, [1, 2])
 
         conn = sqlite3.connect(self.db_path)
         try:
             cur = conn.execute("PRAGMA user_version")
-            self.assertEqual(cur.fetchone()[0], 1)
+            self.assertEqual(cur.fetchone()[0], 2)
 
             cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = {row[0] for row in cur.fetchall()}
@@ -112,7 +116,7 @@ class TestMigrations(unittest.TestCase):
         conn.close()
 
         applied = run_migrations(self.db_path, self.schema_sql)
-        self.assertEqual(applied, [1])
+        self.assertEqual(applied, [1, 2])
 
         backups = self._get_backups()
         self.assertEqual(len(backups), 1)
@@ -166,15 +170,15 @@ class TestMigrations(unittest.TestCase):
         t_cur = m_conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_legacy'")
         self.assertEqual(len(t_cur.fetchall()), 0)
 
-        # user_version == 1 and 6 triggers
-        self.assertEqual(m_conn.execute("PRAGMA user_version").fetchone()[0], 1)
+        # user_version == 2 and 6 triggers
+        self.assertEqual(m_conn.execute("PRAGMA user_version").fetchone()[0], 2)
         self.assertEqual(len(self._get_triggers(m_conn)), 6)
         m_conn.close()
 
     # 3. Gating
     def test_gating(self):
         applied1 = run_migrations(self.db_path, self.schema_sql)
-        self.assertEqual(applied1, [1])
+        self.assertEqual(applied1, [1, 2])
         backups1 = self._get_backups()
 
         applied2 = run_migrations(self.db_path, self.schema_sql)
@@ -192,7 +196,7 @@ class TestMigrations(unittest.TestCase):
         conn.close()
 
         applied = run_migrations(self.db_path, self.schema_sql)
-        self.assertEqual(applied, [1])
+        self.assertEqual(applied, [1, 2])
         backups = self._get_backups()
         self.assertEqual(len(backups), 1)
 
@@ -206,36 +210,41 @@ class TestMigrations(unittest.TestCase):
         # first run on fresh DB makes 0 backups
         self.assertEqual(len(self._get_backups()), 0)
 
-        def bad_migration_2(conn):
+        def bad_migration_3(conn):
             conn.execute("CREATE TABLE x (a)")
             raise RuntimeError("fail")
 
-        with patch("migrations.MIGRATIONS", [(1, MIGRATIONS[0][1]), (2, bad_migration_2)]):
+        next_v = _next_version()
+        patched_migrations = list(MIGRATIONS) + [(next_v, bad_migration_3)]
+
+        with patch("migrations.MIGRATIONS", patched_migrations):
             with self.assertRaises(RuntimeError):
                 run_migrations(self.db_path, self.schema_sql)
 
-        # exactly 1 backup file after the failed v2 attempt
+        # exactly 1 backup file after the failed v3 attempt
         self.assertEqual(len(self._get_backups()), 1)
 
         conn = sqlite3.connect(self.db_path)
         cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='x'")
         self.assertIsNone(cur.fetchone())
-        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 1)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 2)
         self.assertEqual(len(self._get_triggers(conn)), 6)
         conn.close()
 
-        def good_migration_2(conn):
+        def good_migration_3(conn):
             conn.execute("CREATE TABLE y (a)")
 
-        with patch("migrations.MIGRATIONS", [(1, MIGRATIONS[0][1]), (2, good_migration_2)]):
+        patched_migrations_good = list(MIGRATIONS) + [(next_v, good_migration_3)]
+
+        with patch("migrations.MIGRATIONS", patched_migrations_good):
             applied = run_migrations(self.db_path, self.schema_sql)
-            self.assertEqual(applied, [2])
+            self.assertEqual(applied, [next_v])
 
         # exactly 2 after the successful retry
         self.assertEqual(len(self._get_backups()), 2)
 
         conn = sqlite3.connect(self.db_path)
-        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 2)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], next_v)
         self.assertIsNotNone(conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='y'").fetchone())
         conn.close()
 
@@ -300,7 +309,7 @@ class TestMigrations(unittest.TestCase):
         conn.close()
 
         applied = run_migrations(self.db_path, self.schema_sql)
-        self.assertEqual(applied, [1])
+        self.assertEqual(applied, [1, 2])
 
         conn = sqlite3.connect(self.db_path)
         cur = conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger'")
@@ -327,11 +336,11 @@ class TestMigrations(unittest.TestCase):
         self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 99)
         conn.close()
 
-    # 10. NEW test: test_trigger_drops_protect_later_migration
+    # 10. test_trigger_drops_protect_later_migration
     def test_trigger_drops_protect_later_migration(self):
         run_migrations(self.db_path, self.schema_sql)
 
-        def mig2(conn):
+        def mig3(conn):
             conn.execute("ALTER TABLE marriages RENAME TO marriages_old")
             conn.execute(
                 """
@@ -347,25 +356,24 @@ class TestMigrations(unittest.TestCase):
             conn.execute("DROP TABLE marriages_old")
             conn.execute("INSERT INTO children (child_id, parent_id) VALUES (50, 60)")
 
-        with patch("migrations.MIGRATIONS", [(1, MIGRATIONS[0][1]), (2, mig2)]):
+        next_v = _next_version()
+        patched_migrations = list(MIGRATIONS) + [(next_v, mig3)]
+
+        with patch("migrations.MIGRATIONS", patched_migrations):
             applied = run_migrations(self.db_path, self.schema_sql)
-            self.assertEqual(applied, [2])
+            self.assertEqual(applied, [next_v])
 
         conn = sqlite3.connect(self.db_path)
-        # child row (50, 60) exists
         row = conn.execute("SELECT child_id, parent_id FROM children WHERE child_id = 50").fetchone()
         self.assertEqual(row, (50, 60))
 
-        # no trigger SQL in sqlite_master contains "_old"
         cur = conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger'")
         for r in cur.fetchall():
             if r[0]:
                 self.assertNotIn("_old", r[0])
 
-        # exactly 6 triggers
         self.assertEqual(len(self._get_triggers(conn)), 6)
-        # user_version 2
-        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 2)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], next_v)
         conn.close()
 
 

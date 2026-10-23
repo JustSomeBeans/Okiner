@@ -3,10 +3,12 @@ Standalone database migrations module.
 
 Note: Indexes must NOT be in rp_schema.sql (put them in a later migration)
 because the schema runs before pending migrations on legacy DBs.
+Any future migration that rebuilds roleplay_entries must recreate this index.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -189,8 +191,28 @@ def _migration_001_legacy_layouts(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE marriages_legacy")
 
 
+def _migration_002_roleplay_entries_dedupe(conn: sqlite3.Connection) -> None:
+    """Remove duplicate roleplay entries keeping lowest rowid and create unique content index."""
+    cursor = conn.execute(
+        """
+        DELETE FROM roleplay_entries WHERE rowid NOT IN (
+            SELECT MIN(rowid) FROM roleplay_entries
+            GROUP BY guild_id, type, case_type, COALESCE(url,''), COALESCE(texts,''), COALESCE(action_texts,'')
+        )
+        """
+    )
+    logging.info("Removed %d duplicate roleplay_entries rows", cursor.rowcount)
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_roleplay_entries_content
+        ON roleplay_entries(guild_id, type, case_type, COALESCE(url,''), COALESCE(texts,''), COALESCE(action_texts,''))
+        """
+    )
+
+
 MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _migration_001_legacy_layouts),
+    (2, _migration_002_roleplay_entries_dedupe),
 ]
 
 

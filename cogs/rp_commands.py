@@ -877,9 +877,12 @@ class RPCommands(commands.Cog):
             if not is_valid_image_url(value) or len(value) > MAX_URL_LENGTH:
                 await interaction.response.send_message("Invalid image URL.", ephemeral=True)
                 return
-            await database.add_rp_entry(
+            added = await database.add_rp_entry(
                 interaction.user.id, interaction.guild_id, rp_type, case_type=case_type, url=value
             )
+            if not added:
+                await interaction.response.send_message("That value already exists for this RP type.", ephemeral=True)
+                return
             await interaction.response.send_message(f"Added image to `{rp_type}`.", ephemeral=True)
             return
 
@@ -908,15 +911,21 @@ class RPCommands(commands.Cog):
                 await interaction.response.send_message(warning, view=view, ephemeral=True)
                 view.message = await interaction.original_response()
                 return
-            await database.add_rp_entry(
+            added = await database.add_rp_entry(
                 interaction.user.id, interaction.guild_id, rp_type, case_type=case_type, action_text=value
             )
+            if not added:
+                await interaction.response.send_message("That value already exists for this RP type.", ephemeral=True)
+                return
             await interaction.response.send_message(f"Added {self._case_display_name(case_type)} action text to `{rp_type}`.", ephemeral=True)
             return
 
-        await database.add_rp_entry(
+        added = await database.add_rp_entry(
             interaction.user.id, interaction.guild_id, rp_type, case_type=case_type, text=value
         )
+        if not added:
+            await interaction.response.send_message("That value already exists for this RP type.", ephemeral=True)
+            return
         await interaction.response.send_message(f"Added {self._case_display_name(case_type)} text to `{rp_type}`.", ephemeral=True)
 
     @app_commands.command(
