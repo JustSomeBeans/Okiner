@@ -83,6 +83,7 @@ class Moderation(commands.Cog):
             """,
             (guild_id, log_id, honeypot_id, verified_id, mod_id, inactivity_enabled)
         )
+        database.invalidate_guild_config(guild_id)
 
         embed = discord.Embed(
             title="Crouton Configuration Updated",
@@ -156,6 +157,7 @@ class Moderation(commands.Cog):
             """,
             (guild_id, channel_id)
         )
+        database.invalidate_guild_config(guild_id)
         msg = f"Honeypot channel set to {channel.mention}." if channel else "Honeypot channel cleared."
         if channel is not None and interaction.guild and interaction.guild.me:
             if not interaction.guild.me.guild_permissions.ban_members:
@@ -205,12 +207,9 @@ class Moderation(commands.Cog):
         )
         if not allowed:
             # Also allow log channel or staff
-            config_row = await database.fetch_one(
-                "SELECT log_channel_id, moderator_role_id FROM guild_configs WHERE guild_id = ?",
-                (guild_id,)
-            )
-            log_id = config_row[0] if config_row else None
-            mod_role_id = config_row[1] if config_row else None
+            config = await database.get_guild_config(guild_id)
+            log_id = config.log_channel_id if config else None
+            mod_role_id = config.moderator_role_id if config else None
             is_mod = mod_role_id and interaction.user and any(r.id == mod_role_id for r in interaction.user.roles)
             if interaction.channel_id != log_id and not is_mod and not interaction.user.guild_permissions.administrator:
                 await interaction.response.send_message("This channel is not allowlisted for `/scan`.", ephemeral=True)
@@ -248,18 +247,15 @@ class Moderation(commands.Cog):
         guild_id = guild.id
         user_id = message.author.id
 
-        row = await database.fetch_one(
-            "SELECT honeypot_channel_id, log_channel_id, moderator_role_id FROM guild_configs WHERE guild_id = ?",
-            (guild_id,)
-        )
-        if not row or not row[0]:
+        config = await database.get_guild_config(guild_id)
+        if not config or not config.honeypot_channel_id:
             return
 
-        honeypot_id = row[0]
+        honeypot_id = config.honeypot_channel_id
         if not channel_matches_honeypot(message.channel, honeypot_id):
             return
 
-        mod_role_id = row[2]
+        mod_role_id = config.moderator_role_id
         if is_honeypot_exempt(message.author, mod_role_id):
             return
 
@@ -300,7 +296,7 @@ class Moderation(commands.Cog):
                 except (discord.Forbidden, discord.NotFound, discord.HTTPException) as e:
                     logging.warning(f"Failed to delete message after honeypot trigger for user {user_id} in guild {guild_id}: {e}")
 
-            log_channel_id = row[1]
+            log_channel_id = config.log_channel_id
             if log_channel_id:
                 log_chan = guild.get_channel(log_channel_id)
                 if log_chan and isinstance(log_chan, discord.TextChannel):

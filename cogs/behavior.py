@@ -39,6 +39,7 @@ class Behavior(commands.Cog):
             """,
             (guild_id,)
         )
+        database.invalidate_guild_config(guild_id)
         await interaction.response.send_message("Automatic unverification system enabled.", ephemeral=True)
 
     # default_permissions is a UI hint, not a security boundary
@@ -55,6 +56,7 @@ class Behavior(commands.Cog):
             """,
             (guild_id,)
         )
+        database.invalidate_guild_config(guild_id)
         await interaction.response.send_message("Automatic unverification system disabled.", ephemeral=True)
 
     # default_permissions is a UI hint, not a security boundary

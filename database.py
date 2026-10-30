@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import TYPE_CHECKING
+from dataclasses import dataclass
 
 if TYPE_CHECKING:
     from bot import OkinerBot
@@ -24,6 +25,46 @@ if TYPE_CHECKING:
 # so database.py can't import bot.py at module level). set_bot() is called
 # in setup_hook once the pool is ready.
 _bot: "OkinerBot | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class GuildConfig:
+    guild_id: int
+    log_channel_id: int | None
+    honeypot_channel_id: int | None
+    verified_role_id: int | None
+    moderator_role_id: int | None
+    inactivity_system_enabled: bool
+
+
+_guild_config_cache: dict[int, GuildConfig | None] = {}
+
+
+async def get_guild_config(guild_id: int) -> GuildConfig | None:
+    """Single-process cache; every writer of guild_configs MUST call invalidate_guild_config after its write."""
+    if guild_id in _guild_config_cache:
+        return _guild_config_cache[guild_id]
+    row = await fetch_one(
+        "SELECT guild_id, log_channel_id, honeypot_channel_id, verified_role_id, moderator_role_id, inactivity_system_enabled FROM guild_configs WHERE guild_id = ?",
+        (guild_id,)
+    )
+    if row is None:
+        config = None
+    else:
+        config = GuildConfig(
+            guild_id=row[0],
+            log_channel_id=row[1],
+            honeypot_channel_id=row[2],
+            verified_role_id=row[3],
+            moderator_role_id=row[4],
+            inactivity_system_enabled=bool(row[5])
+        )
+    _guild_config_cache[guild_id] = config
+    return config
+
+
+def invalidate_guild_config(guild_id: int) -> None:
+    _guild_config_cache.pop(guild_id, None)
 
 
 INTEGRITY_TRIGGERS_SQL = """

@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 from discord.ext import commands
+from database import GuildConfig
 from cogs.moderation import Moderation, is_honeypot_exempt, channel_matches_honeypot
 
 class TestHoneypot(unittest.IsolatedAsyncioTestCase):
@@ -129,7 +130,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         guild.get_channel.return_value = log_chan
         guild.ban = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             await cog.on_message(message)
             mock_fetch.assert_awaited_once()
             guild.ban.assert_awaited_once_with(
@@ -179,7 +180,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         forbidden_exc = discord.Forbidden(MagicMock(status=403, reason="Forbidden"), "Forbidden")
         guild.ban = AsyncMock(side_effect=forbidden_exc)
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             with self.assertLogs(level="WARNING") as cm:
                 await cog.on_message(message)
             mock_fetch.assert_awaited_once()
@@ -227,7 +228,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         guild.get_channel.return_value = log_chan
         guild.ban = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             await cog.on_message(message)
             mock_fetch.assert_awaited_once()
             guild.ban.assert_not_called()
@@ -268,7 +269,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         guild.get_channel.return_value = log_chan
         guild.ban = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             await cog.on_message(message)
             mock_fetch.assert_awaited_once()
             guild.ban.assert_not_called()
@@ -310,7 +311,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         guild.get_channel.return_value = log_chan
         guild.ban = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             with self.assertLogs(level="WARNING") as cm:
                 await cog.on_message(message)
             mock_fetch.assert_awaited_once()
@@ -353,7 +354,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         guild.get_channel.return_value = log_chan
         guild.ban = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             with self.assertLogs(level="ERROR") as cm:
                 await cog.on_message(message)
             mock_fetch.assert_awaited_once()
@@ -399,7 +400,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
         guild.ban.side_effect = slow_ban
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             await asyncio.gather(
                 cog.on_message(message),
                 cog.on_message(message)
@@ -417,7 +418,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         message.author.bot = False
         message.guild = MagicMock(spec=discord.Guild)
 
-        with patch("database.fetch_one", new=AsyncMock()) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock()) as mock_fetch:
             await cog.on_message(message)
             mock_fetch.assert_not_awaited()
             message.guild.ban.assert_not_awaited()
@@ -446,7 +447,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         message1.channel.id = 5000
         message1.delete = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             await cog.on_message(message1)
             mock_fetch.assert_awaited_once()
             message1.delete.assert_not_awaited()
@@ -469,7 +470,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         message2.channel.id = 5000
         message2.delete = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             await cog.on_message(message2)
             mock_fetch.assert_awaited_once()
             message2.delete.assert_not_awaited()
@@ -502,7 +503,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         message.channel = channel
         message.delete = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             await cog.on_message(message)
             mock_fetch.assert_awaited_once()
             message.delete.assert_not_awaited()
@@ -531,7 +532,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         message.channel.id = 5000
         message.delete = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=None)) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=None)) as mock_fetch:
             await cog.on_message(message)
             mock_fetch.assert_awaited_once()
             message.delete.assert_not_awaited()
@@ -573,7 +574,7 @@ class TestHoneypot(unittest.IsolatedAsyncioTestCase):
         guild.get_channel.return_value = log_chan
         guild.ban = AsyncMock()
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(5000, 6000, 999))) as mock_fetch:
+        with patch("database.get_guild_config", new=AsyncMock(return_value=GuildConfig(guild_id=1000, log_channel_id=6000, honeypot_channel_id=5000, verified_role_id=None, moderator_role_id=999, inactivity_system_enabled=False))) as mock_fetch:
             await cog.on_message(message)
             mock_fetch.assert_awaited_once()
             guild.ban.assert_awaited_once()
