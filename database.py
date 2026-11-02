@@ -177,6 +177,20 @@ async def execute_write(query: str, params: tuple = ()) -> int:
             raise
 
 
+async def execute_batch(statements: list[tuple[str, list[tuple]]]) -> None:
+    """Run several executemany statements in ONE BEGIN IMMEDIATE transaction; rollback and re-raise on any failure."""
+    async with _pool().acquire() as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            for sql, rows in statements:
+                if rows:
+                    await conn.executemany(sql, rows)
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
+
+
 async def fetch_one(query: str, params: tuple = ()) -> tuple | None:
     """Fetch a single database row."""
     async with _pool().acquire() as conn:

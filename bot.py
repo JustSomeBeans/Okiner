@@ -147,9 +147,9 @@ class OkinerBot(commands.Bot):
         await self.load_extension("cogs.behavior")
 
     async def close(self) -> None:
+        await super().close()
         if self.db_pool is not None:
             await self.db_pool.close()
-        await super().close()
 
     async def on_ready(self) -> None:
         logging.info(
