@@ -38,6 +38,7 @@ class ActionTextConfirmView(discord.ui.View):
         on_confirm: Callable[[discord.Interaction], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(timeout=60)
+        self.message: discord.Message | None = None
         self.user_id = user_id
         self.guild_id = guild_id
         self.rp_type = rp_type
@@ -57,7 +58,8 @@ class ActionTextConfirmView(discord.ui.View):
     async def on_timeout(self) -> None:
         """Disable the buttons and update the message when the confirmation window expires."""
         for item in self.children:
-            item.disabled = True
+            if hasattr(item, "disabled"):
+                item.disabled = True
         # message is the attribute discord.py sets automatically when the view
         #is attached via send_message(..., view=self)
         if self.message is not None:
@@ -66,7 +68,7 @@ class ActionTextConfirmView(discord.ui.View):
                     content="Confirmation timed out. Run the command again if you still want to add it.",
                     view=self,
                 )
-            except discord.HTTPException:
+            except (discord.NotFound, discord.HTTPException):
                 pass # Most likely message deleted or channel gone - really not worth crashing over.
 
     @discord.ui.button(label="Yes, Add It", style=discord.ButtonStyle.green)
@@ -125,6 +127,7 @@ class RPBackView(discord.ui.View):
         guild_id: int,
     ) -> None:
         super().__init__(timeout=300)
+        self.message: discord.Message | None = None
         self.cog = cog
         self.rp_type = rp_type
         self.original_actor_id = original_actor_id
@@ -148,12 +151,13 @@ class RPBackView(discord.ui.View):
     async def on_timeout(self) -> None:
         """Disable the button and update the message when the response window expires."""
         for item in self.children:
-            item.disabled = True
+            if hasattr(item, "disabled"):
+                item.disabled = True
 
         if self.message is not None:
             try:
                 await self.message.edit(view=self)
-            except discord.HTTPException:
+            except (discord.NotFound, discord.HTTPException):
                 pass
 
     @discord.ui.button(label="RP back", style=discord.ButtonStyle.blurple)
@@ -275,8 +279,14 @@ class MarriageConfirmView(discord.ui.LayoutView):
                     if hasattr(item, 'disabled'):
                         item.disabled = True
         
-        await self.interaction.edit_original_response(content=None, view=self)
-        await self.interaction.followup.send(f"The proposal is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
+        try:
+            await self.interaction.edit_original_response(content=None, view=self)
+        except (discord.NotFound, discord.HTTPException):
+            pass
+        try:
+            await self.interaction.followup.send(f"The proposal is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.target.id:
@@ -304,8 +314,14 @@ class AdoptionConfirmView(discord.ui.LayoutView):
                     if hasattr(item, 'disabled'):
                         item.disabled = True
         
-        await self.interaction.edit_original_response(content=None, view=self)
-        await self.interaction.followup.send(f"The adoption is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
+        try:
+            await self.interaction.edit_original_response(content=None, view=self)
+        except (discord.NotFound, discord.HTTPException):
+            pass
+        try:
+            await self.interaction.followup.send(f"The adoption is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.target.id:
@@ -376,6 +392,7 @@ class AddRPOptionsView(discord.ui.View):
 
     def __init__(self, user_id: int, rp_type: str, image_url: str, cog: "RPCommands") -> None:
         super().__init__(timeout=300)
+        self.message: discord.Message | None = None
         self.user_id = user_id
         self.rp_type = rp_type
         self.image_url = image_url
@@ -393,11 +410,12 @@ class AddRPOptionsView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         for item in self.children:
-            item.disabled = True
+            if hasattr(item, "disabled"):
+                item.disabled = True
         if self.message is not None:
             try:
                 await self.message.edit(content="Configuration timed out.", view=self)
-            except discord.HTTPException:
+            except (discord.NotFound, discord.HTTPException):
                 pass
 
     @discord.ui.button(label="Mode: Standard Only", style=discord.ButtonStyle.primary, custom_id="mode_std")
@@ -499,6 +517,7 @@ class EditRPOptionsView(discord.ui.View):
 
     def __init__(self, user_id: int, rp_type: str, cog: "RPCommands") -> None:
         super().__init__(timeout=300)
+        self.message: discord.Message | None = None
         self.user_id = user_id
         self.rp_type = rp_type
         self.cog = cog
@@ -529,11 +548,12 @@ class EditRPOptionsView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         for item in self.children:
-            item.disabled = True
+            if hasattr(item, "disabled"):
+                item.disabled = True
         if self.message is not None:
             try:
                 await self.message.edit(view=self)
-            except discord.HTTPException:
+            except (discord.NotFound, discord.HTTPException):
                 pass
 
     async def select_callback(self, interaction: discord.Interaction) -> None:
@@ -588,6 +608,7 @@ class ManageRPView(discord.ui.View):
 
     def __init__(self, user_id: int, guild_id: int, rp_types: list[str], cog: "RPCommands") -> None:
         super().__init__(timeout=300)
+        self.message: discord.Message | None = None
         self.user_id = user_id
         self.guild_id = guild_id
         self.rp_types = rp_types
@@ -613,11 +634,12 @@ class ManageRPView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         for item in self.children:
-            item.disabled = True
+            if hasattr(item, "disabled"):
+                item.disabled = True
         if self.message is not None:
             try:
                 await self.message.edit(view=self)
-            except discord.HTTPException:
+            except (discord.NotFound, discord.HTTPException):
                 pass
 
     async def type_select_callback(self, interaction: discord.Interaction) -> None:
@@ -720,6 +742,7 @@ class ManageRPView(discord.ui.View):
             cog=self.cog,
             parent_view=self,
         )
+        entries_view.message = interaction.message
         await interaction.response.edit_message(content=entries_view.render_content(), view=entries_view)
         self.stop()
 
@@ -740,6 +763,7 @@ class ManageRPEntriesView(discord.ui.View):
         parent_view: ManageRPView,
     ) -> None:
         super().__init__(timeout=300)
+        self.message: discord.Message | None = None
         self.user_id = user_id
         self.guild_id = guild_id
         self.rp_type = rp_type
@@ -762,11 +786,12 @@ class ManageRPEntriesView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         for item in self.children:
-            item.disabled = True
+            if hasattr(item, "disabled"):
+                item.disabled = True
         if self.message is not None:
             try:
                 await self.message.edit(view=self)
-            except discord.HTTPException:
+            except (discord.NotFound, discord.HTTPException):
                 pass
 
     def render_content(self) -> str:
@@ -847,6 +872,7 @@ class ManageRPEntriesView(discord.ui.View):
         back_btn.callback = new_view.back_to_types_callback
         new_view.add_item(back_btn)
 
+        new_view.message = interaction.message
         await interaction.response.edit_message(content=f"Managing RP type: **{self.rp_type}**", view=new_view)
         self.stop()
 
@@ -905,4 +931,3 @@ class EditEntryModal(discord.ui.Modal):
         except Exception:
             logging.exception("Failed to update RP entry")
             await interaction.response.send_message("Failed to update entry due to database error.", ephemeral=True)
-
