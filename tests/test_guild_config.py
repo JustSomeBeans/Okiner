@@ -176,7 +176,7 @@ class TestGuildConfigCache(unittest.IsolatedAsyncioTestCase):
             call_order.append("invalidate")
             self.assertEqual(guild_id, 123)
 
-        with patch("database.fetch_one", new=AsyncMock(return_value=(None, None, None, None, 0))), \
+        with patch("database.get_guild_config", new=AsyncMock(return_value=None)), \
              patch("database.execute_query", new=AsyncMock(side_effect=mock_exec)), \
              patch("database.invalidate_guild_config", side_effect=mock_invalidate):
             await cog.crouton_setup.callback(cog, interaction)

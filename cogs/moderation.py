@@ -60,30 +60,48 @@ class Moderation(commands.Cog):
             await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
             return
 
-        # Fetch existing config
-        row = await database.fetch_one(
-            "SELECT log_channel_id, verified_role_id, moderator_role_id, honeypot_channel_id, inactivity_system_enabled FROM guild_configs WHERE guild_id = ?",
-            (guild_id,)
-        )
-
-        log_id = log_channel.id if log_channel else (row[0] if row else None)
-        verified_id = verified_role.id if verified_role else (row[1] if row else None)
-        mod_id = moderator_role.id if moderator_role else (row[2] if row else None)
-        honeypot_id = row[3] if row else None
-        inactivity_enabled = row[4] if row else 0
+        if moderator_role is not None and moderator_role.is_default():
+            await interaction.response.send_message("The moderator role can't be @everyone.", ephemeral=True)
+            return
+        if verified_role is not None and verified_role.is_default():
+            await interaction.response.send_message("The verified role can't be @everyone.", ephemeral=True)
+            return
+        if verified_role is not None and verified_role.managed:
+            await interaction.response.send_message("The verified role can't be a bot/integration-managed role.", ephemeral=True)
+            return
+        if log_channel is not None and interaction.guild and interaction.guild.me:
+            perms = log_channel.permissions_for(interaction.guild.me)
+            if not (perms.view_channel and perms.send_messages and perms.embed_links):
+                await interaction.response.send_message(f"I need View Channel, Send Messages and Embed Links in {log_channel.mention}.", ephemeral=True)
+                return
+        if log_channel is not None:
+            config = await database.get_guild_config(guild_id)
+            if config and config.honeypot_channel_id == log_channel.id:
+                await interaction.response.send_message("The log channel can't be the honeypot channel.", ephemeral=True)
+                return
 
         await database.execute_query(
             """
-            INSERT INTO guild_configs (guild_id, log_channel_id, honeypot_channel_id, verified_role_id, moderator_role_id, inactivity_system_enabled)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO guild_configs (guild_id, log_channel_id, verified_role_id, moderator_role_id)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(guild_id) DO UPDATE SET
-                log_channel_id = excluded.log_channel_id,
-                verified_role_id = excluded.verified_role_id,
-                moderator_role_id = excluded.moderator_role_id
+                log_channel_id = COALESCE(excluded.log_channel_id, guild_configs.log_channel_id),
+                verified_role_id = COALESCE(excluded.verified_role_id, guild_configs.verified_role_id),
+                moderator_role_id = COALESCE(excluded.moderator_role_id, guild_configs.moderator_role_id)
             """,
-            (guild_id, log_id, honeypot_id, verified_id, mod_id, inactivity_enabled)
+            (
+                guild_id,
+                log_channel.id if log_channel else None,
+                verified_role.id if verified_role else None,
+                moderator_role.id if moderator_role else None,
+            )
         )
         database.invalidate_guild_config(guild_id)
+
+        config = await database.get_guild_config(guild_id)
+        log_id = config.log_channel_id if config else None
+        verified_id = config.verified_role_id if config else None
+        mod_id = config.moderator_role_id if config else None
 
         embed = discord.Embed(
             title="Crouton Configuration Updated",
