@@ -29,13 +29,15 @@ async def rp_type_autocomplete(
     if bot.db_pool is None:
         return []
 
-    pattern = f"%{normalize_rp_type(current)}%"
+    normalized = normalize_rp_type(current)
+    escaped = normalized.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
     async with bot.db_pool.acquire() as conn:
         result = await conn.execute(
             """
             SELECT type
             FROM rp_types
-            WHERE guild_id = ? AND LOWER(type) LIKE ?
+            WHERE guild_id = ? AND LOWER(type) LIKE ? ESCAPE '\\'
             ORDER BY type COLLATE NOCASE
             LIMIT 25
             """,

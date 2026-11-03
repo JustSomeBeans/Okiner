@@ -685,7 +685,14 @@ class ManageRPView(discord.ui.View):
             "null_text": ("nullcase", "texts"),
             "null_action": ("nullcase", "action_texts"),
         }
-        case_type, column = case_map[self.selected_pool]
+        case_mapping = case_map.get(self.selected_pool)
+        if case_mapping is None:
+            await interaction.response.send_message(
+                "That option isn't available anymore. Please run /manage_rp again.",
+                ephemeral=True,
+            )
+            return
+        case_type, column = case_mapping
         
         async with interaction.client.db_pool.acquire() as conn:
             result = await conn.execute(
