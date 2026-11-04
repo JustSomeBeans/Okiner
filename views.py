@@ -16,6 +16,7 @@ import logging
 import sqlite3
 import time
 
+from checks import has_manage_messages
 from config import EVERYONE_TARGET, MAX_URL_LENGTH, SELF_CASE, STANDARD_CASE
 from database import add_child, add_marriage, add_rp_entry, execute_query, fetch_column, remove_rp_entry, update_rp_entry
 from utils import PlaceholderTarget, is_imgur_page_url, is_valid_image_url, normalize_image_url
@@ -406,6 +407,12 @@ class AddRPOptionsView(discord.ui.View):
                 ephemeral=True,
             )
             return False
+        if not has_manage_messages(interaction):
+            await interaction.response.send_message(
+                "You no longer have permission to manage RP entries.",
+                ephemeral=True,
+            )
+            return False
         return True
 
     async def on_timeout(self) -> None:
@@ -498,6 +505,12 @@ class AddRPModal(discord.ui.Modal):
             self.add_item(self.null_text_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not has_manage_messages(interaction):
+            await interaction.response.send_message(
+                "You no longer have permission to manage RP entries.",
+                ephemeral=True,
+            )
+            return
         self_text = getattr(self, "self_text_input", None)
         null_text = getattr(self, "null_text_input", None)
         await self.cog._handle_add_rp_submission(
@@ -541,6 +554,12 @@ class EditRPOptionsView(discord.ui.View):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "Only the person who ran the command can use this menu.",
+                ephemeral=True,
+            )
+            return False
+        if not has_manage_messages(interaction):
+            await interaction.response.send_message(
+                "You no longer have permission to manage RP entries.",
                 ephemeral=True,
             )
             return False
@@ -595,6 +614,12 @@ class EditRPModal(discord.ui.Modal):
         self.add_item(self.value_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not has_manage_messages(interaction):
+            await interaction.response.send_message(
+                "You no longer have permission to manage RP entries.",
+                ephemeral=True,
+            )
+            return
         await self.cog._handle_edit_rp_submission(
             interaction,
             self.rp_type,
@@ -627,6 +652,12 @@ class ManageRPView(discord.ui.View):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "Only the person who ran the command can use this menu.",
+                ephemeral=True,
+            )
+            return False
+        if not has_manage_messages(interaction):
+            await interaction.response.send_message(
+                "You no longer have permission to manage RP entries.",
                 ephemeral=True,
             )
             return False
@@ -681,6 +712,12 @@ class ManageRPView(discord.ui.View):
     async def pool_select_callback(self, interaction: discord.Interaction) -> None:
         self.selected_pool = interaction.data["values"][0]
         if self.selected_pool == "remove_type":
+            if not has_manage_messages(interaction):
+                await interaction.response.send_message(
+                    "You no longer have permission to manage RP entries.",
+                    ephemeral=True,
+                )
+                return
             try:
                 await execute_query(
                     "DELETE FROM rp_types WHERE guild_id = ? AND type = ?",
@@ -779,6 +816,12 @@ class ManageRPEntriesView(discord.ui.View):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "Only the person who ran the command can navigate this view.",
+                ephemeral=True,
+            )
+            return False
+        if not has_manage_messages(interaction):
+            await interaction.response.send_message(
+                "You no longer have permission to manage RP entries.",
                 ephemeral=True,
             )
             return False
@@ -895,6 +938,12 @@ class EditEntryModal(discord.ui.Modal):
         self.add_item(self.input_field)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not has_manage_messages(interaction):
+            await interaction.response.send_message(
+                "You no longer have permission to manage RP entries.",
+                ephemeral=True,
+            )
+            return
         new_value = self.input_field.value.strip()
         if not new_value:
             await interaction.response.send_message("Value cannot be blank.", ephemeral=True)
