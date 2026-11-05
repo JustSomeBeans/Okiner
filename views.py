@@ -780,7 +780,7 @@ class ManageRPView(discord.ui.View):
             parent_view=self,
         )
         entries_view.message = interaction.message
-        await interaction.response.edit_message(content=entries_view.render_content(), view=entries_view)
+        await entries_view._show(interaction)
         self.stop()
 
 
@@ -843,11 +843,30 @@ class ManageRPEntriesView(discord.ui.View):
         entry = self.entries[self.page]
         return f"Managing `{self.rp_type}` ({self.pool}) — Entry {self.page + 1} of {len(self.entries)}:\n```\n{entry}\n```"
 
+    def render_kwargs(self) -> dict:
+        if not self.entries or self.column != "url":
+            return {"content": self.render_content(), "embed": None}
+        entry = self.entries[self.page]
+        header = f"Managing `{self.rp_type}` ({self.pool}) — Entry {self.page + 1} of {len(self.entries)}:"
+        embed = discord.Embed(description=entry.replace("`", "'")[:4000], color=discord.Color.blurple())
+        embed.set_image(url=entry)
+        return {"content": header, "embed": embed}
+
+    async def _show(self, interaction: discord.Interaction) -> None:
+        try:
+            await interaction.response.edit_message(**self.render_kwargs(), view=self)
+        except discord.HTTPException:
+            if interaction.response.is_done() is False:
+                logging.warning("HTTPException in ManageRPEntriesView._show; falling back to text-only")
+                await interaction.response.edit_message(content=self.render_content(), embed=None, view=self)
+            else:
+                raise
+
     @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary, custom_id="prev")
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if self.page > 0:
             self.page -= 1
-        await interaction.response.edit_message(content=self.render_content(), view=self)
+        await self._show(interaction)
 
     @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger, custom_id="delete")
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -863,11 +882,12 @@ class ManageRPEntriesView(discord.ui.View):
             if not self.entries:
                 await interaction.response.edit_message(
                     content=f"Deleted entry. All entries for `{self.pool}` under `{self.rp_type}` have been removed.",
+                    embed=None,
                     view=None,
                 )
                 self.stop()
                 return
-            await interaction.response.edit_message(content=self.render_content(), view=self)
+            await self._show(interaction)
         except Exception:
             logging.exception("Failed to delete entry")
             await interaction.response.send_message("Failed to delete entry due to database error.", ephemeral=True)
@@ -885,7 +905,7 @@ class ManageRPEntriesView(discord.ui.View):
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if self.page < len(self.entries) - 1:
             self.page += 1
-        await interaction.response.edit_message(content=self.render_content(), view=self)
+        await self._show(interaction)
 
     @discord.ui.button(label="« Back", style=discord.ButtonStyle.secondary, custom_id="back")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -916,7 +936,7 @@ class ManageRPEntriesView(discord.ui.View):
         new_view.add_item(back_btn)
 
         new_view.message = interaction.message
-        await interaction.response.edit_message(content=f"Managing RP type: **{self.rp_type}**", view=new_view)
+        await interaction.response.edit_message(content=f"Managing RP type: **{self.rp_type}**", embed=None, view=new_view)
         self.stop()
 
 
@@ -974,7 +994,7 @@ class EditEntryModal(discord.ui.Modal):
             )
             idx = self.browser_view.entries.index(self.old_entry)
             self.browser_view.entries[idx] = new_value
-            await interaction.response.edit_message(content=self.browser_view.render_content(), view=self.browser_view)
+            await self.browser_view._show(interaction)
         except sqlite3.IntegrityError:
             await interaction.response.send_message("That value already exists for this RP type.", ephemeral=True)
         except Exception:

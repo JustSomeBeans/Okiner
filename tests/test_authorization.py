@@ -126,6 +126,7 @@ class TestAuthorization(unittest.IsolatedAsyncioTestCase):
         cog = MagicMock()
         browser_view = MagicMock()
         browser_view.column = "texts"
+        browser_view._show = AsyncMock()
 
         modals = [
             ("AddRPModal", AddRPModal("hug", "https://i.imgur.com/x.png", "standard", cog)),

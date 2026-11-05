@@ -145,6 +145,7 @@ class TestAutocompleteAndManage(unittest.IsolatedAsyncioTestCase):
         view.selected_type = "hug"
 
         with patch("views.ManageRPEntriesView") as mock_entries_view:
+            mock_entries_view.return_value._show = AsyncMock()
             await view.pool_select_callback(interaction)
             mock_entries_view.assert_called_once()
 
