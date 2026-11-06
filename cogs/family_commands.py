@@ -1,3 +1,6 @@
+import asyncio
+import collections
+import logging
 import discord
 import io
 import math
@@ -22,6 +25,8 @@ NODE_HEIGHT = 74
 HORIZONTAL_GAP = 70
 VERTICAL_GAP = 92
 PADDING = 48
+
+MAX_TREE_NODES = 40
 
 class FamilyCommands(commands.Cog):
     """All family commands."""
@@ -50,51 +55,81 @@ class FamilyCommands(commands.Cog):
             [(int(parent_id), int(child_id)) for parent_id, child_id in children],
         )
 
+    def _names_for(self, guild: discord.Guild, ids: set[int]) -> dict[int, str]:
+        names: dict[int, str] = {}
+        for uid in ids:
+            member = guild.get_member(uid)
+            if member is not None:
+                names[uid] = member.display_name
+        return names
+
     def _build_family_component(
         self,
         target_id: int,
         marriages: list[tuple[int, int]],
         children: list[tuple[int, int]],
-    ) -> tuple[set[int], list[tuple[int, int]], list[tuple[int, int]]]:
-        graph = nx.Graph()
-        graph.add_node(target_id)
+        allowed_ids: set[int],
+    ) -> tuple[set[int], list[tuple[int, int]], list[tuple[int, int]], bool]:
+        allowed_ids.add(target_id)
+        valid_marriages = [
+            (s1, s2) for s1, s2 in marriages if s1 in allowed_ids and s2 in allowed_ids
+        ]
+        valid_children = [
+            (p, c) for p, c in children if p in allowed_ids and c in allowed_ids
+        ]
 
-        for spouse1_id, spouse2_id in marriages:
-            graph.add_edge(spouse1_id, spouse2_id)
+        adj: dict[int, list[int]] = {}
+        for s1, s2 in valid_marriages:
+            adj.setdefault(s1, []).append(s2)
+            adj.setdefault(s2, []).append(s1)
+        for p, c in valid_children:
+            adj.setdefault(p, []).append(c)
+            adj.setdefault(c, []).append(p)
+        for uid in allowed_ids:
+            adj.setdefault(uid, [])
+        for neighbors in adj.values():
+            neighbors.sort()
 
-        for parent_id, child_id in children:
-            graph.add_edge(parent_id, child_id)
+        nodes: set[int] = set()
+        queue = collections.deque([target_id])
+        nodes.add(target_id)
+        truncated = False
 
-        component = nx.node_connected_component(graph, target_id)
+        while queue:
+            current_id = queue.popleft()
+            for neighbor in adj.get(current_id, []):
+                if neighbor not in nodes:
+                    if len(nodes) >= MAX_TREE_NODES:
+                        truncated = True
+                        continue
+                    nodes.add(neighbor)
+                    queue.append(neighbor)
+
+        if queue:
+            truncated = True
+
         component_marriages = [
-            (spouse1_id, spouse2_id)
-            for spouse1_id, spouse2_id in marriages
-            if spouse1_id in component and spouse2_id in component
+            (s1, s2) for s1, s2 in valid_marriages if s1 in nodes and s2 in nodes
         ]
         component_children = [
-            (parent_id, child_id)
-            for parent_id, child_id in children
-            if parent_id in component and child_id in component
+            (p, c) for p, c in valid_children if p in nodes and c in nodes
         ]
 
-        return component, component_marriages, component_children
-
-    def _display_name_for_user(self, guild: discord.Guild, user_id: int) -> str:
-        member = guild.get_member(user_id)
-        if member is not None:
-            return member.display_name
-        return f"Unknown User\n{user_id}"
+        return nodes, component_marriages, component_children, truncated
 
     def _load_font(self, size: int, *, bold: bool = False) -> ImageFont.ImageFont:
-        font_names = (
-            ("arialbd.ttf", "Arial Bold.ttf") if bold else ("arial.ttf", "Arial.ttf")
-        )
+        regular_fonts = ("DejaVuSans.ttf", "LiberationSans-Regular.ttf", "arial.ttf", "Arial.ttf")
+        bold_fonts = ("DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "arialbd.ttf", "Arial Bold.ttf")
+        font_names = bold_fonts if bold else regular_fonts
         for font_name in font_names:
             try:
                 return ImageFont.truetype(font_name, size)
             except OSError:
                 continue
-        return ImageFont.load_default()
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:
+            return ImageFont.load_default()
 
     def _wrap_text(
         self,
@@ -134,26 +169,34 @@ class FamilyCommands(commands.Cog):
         undirected.add_edges_from(marriages)
         undirected.add_edges_from(children)
 
-        generations: dict[int, int] = {target_id: 0}
-        queue = [target_id]
-        while queue:
-            current_id = queue.pop(0)
-            current_generation = generations[current_id]
-            for parent_id, child_id in children:
-                if child_id == current_id and parent_id not in generations:
-                    generations[parent_id] = current_generation - 1
-                    queue.append(parent_id)
-                if parent_id == current_id and child_id not in generations:
-                    generations[child_id] = current_generation + 1
-                    queue.append(child_id)
+        child_edges_of: dict[int, list[tuple[int, int]]] = {}
+        spouses_of: dict[int, list[int]] = {}
 
-            for spouse1_id, spouse2_id in marriages:
-                if spouse1_id == current_id and spouse2_id not in generations:
-                    generations[spouse2_id] = current_generation
-                    queue.append(spouse2_id)
-                if spouse2_id == current_id and spouse1_id not in generations:
-                    generations[spouse1_id] = current_generation
-                    queue.append(spouse1_id)
+        # Edge order is preserved so traversal matches the original algorithm exactly.
+        # Each entry is (neighbor, generation_delta): -1 = neighbor is my parent, +1 = my child.
+        for p, c in children:
+            if p in nodes and c in nodes:
+                child_edges_of.setdefault(p, []).append((c, 1))
+                child_edges_of.setdefault(c, []).append((p, -1))
+
+        for s1, s2 in marriages:
+            if s1 in nodes and s2 in nodes:
+                spouses_of.setdefault(s1, []).append(s2)
+                spouses_of.setdefault(s2, []).append(s1)
+
+        generations: dict[int, int] = {target_id: 0}
+        queue = collections.deque([target_id])
+        while queue:
+            current_id = queue.popleft()
+            current_generation = generations[current_id]
+            for neighbor_id, delta in child_edges_of.get(current_id, []):
+                if neighbor_id not in generations:
+                    generations[neighbor_id] = current_generation + delta
+                    queue.append(neighbor_id)
+            for spouse_id in spouses_of.get(current_id, []):
+                if spouse_id not in generations:
+                    generations[spouse_id] = current_generation
+                    queue.append(spouse_id)
 
         for node_id in nodes:
             generations.setdefault(node_id, 0)
@@ -162,13 +205,15 @@ class FamilyCommands(commands.Cog):
         for node_id, generation in generations.items():
             rows.setdefault(generation, []).append(node_id)
 
+        dist = nx.single_source_shortest_path_length(undirected, target_id)
+
         positions: dict[int, tuple[float, float]] = {}
         sorted_generations = sorted(rows)
         for row_index, generation in enumerate(sorted_generations):
             row_nodes = rows[generation]
             row_nodes.sort(
                 key=lambda node_id: (
-                    nx.shortest_path_length(undirected, target_id, node_id),
+                    dist.get(node_id, 0),
                     node_id,
                 )
             )
@@ -183,7 +228,7 @@ class FamilyCommands(commands.Cog):
 
     def _render_family_tree_image(
         self,
-        guild: discord.Guild,
+        names: dict[int, str],
         target_id: int,
         nodes: set[int],
         marriages: list[tuple[int, int]],
@@ -253,7 +298,7 @@ class FamilyCommands(commands.Cog):
                 width=2,
             )
 
-            display_name = self._display_name_for_user(guild, node_id)
+            display_name = names.get(node_id, str(node_id))
             name_lines = self._wrap_text(draw, display_name, body_font, NODE_WIDTH - 28)
             total_text_height = len(name_lines) * 18 + 14
             text_y = y - total_text_height / 2
@@ -276,7 +321,7 @@ class FamilyCommands(commands.Cog):
                 font=subtext_font,
             )
 
-        title = f"{self._display_name_for_user(guild, target_id).splitlines()[0]}'s family tree"
+        title = f"{names.get(target_id, str(target_id)).splitlines()[0]}'s family tree"
         title_width = draw.textlength(title, font=title_font)
         draw.text(
             ((width - title_width) / 2, 12),
@@ -296,7 +341,7 @@ class FamilyCommands(commands.Cog):
     async def family_tree(
         self,
         interaction: discord.Interaction,
-        user: discord.User | None = None,
+        user: discord.Member | None = None,
     ) -> None:
         guild = interaction.guild
         if guild is None:
@@ -309,28 +354,41 @@ class FamilyCommands(commands.Cog):
         target = user or interaction.user
         await interaction.response.defer(thinking=True)
 
-        marriages, children = await self._fetch_relationship_rows()
-        nodes, component_marriages, component_children = self._build_family_component(
-            target.id,
-            marriages,
-            children,
-        )
-        image_data = self._render_family_tree_image(
-            guild,
-            target.id,
-            nodes,
-            component_marriages,
-            component_children,
-        )
-        file = discord.File(
-            image_data,
-            filename=f"family_tree_{target.id}.png",
-        )
-        await interaction.followup.send(
-            f"Family tree for **{target.display_name}**",
-            file=file,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        try:
+            marriages, children = await self._fetch_relationship_rows()
+            allowed = {m.id for m in guild.members} | {target.id}
+            names = self._names_for(guild, allowed)
+            nodes, cm, cc, truncated = await asyncio.to_thread(
+                self._build_family_component,
+                target.id,
+                marriages,
+                children,
+                allowed,
+            )
+            image_data = await asyncio.to_thread(
+                self._render_family_tree_image,
+                names,
+                target.id,
+                nodes,
+                cm,
+                cc,
+            )
+            file = discord.File(
+                image_data,
+                filename=f"family_tree_{target.id}.png",
+            )
+            content = f"Family tree for **{discord.utils.escape_markdown(target.display_name)}**"
+            if truncated:
+                content += f"\nShowing the {MAX_TREE_NODES} closest relatives; the full tree is larger."
+            await interaction.followup.send(
+                content,
+                file=file,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except Exception:
+            logging.exception("Failed to render family tree")
+            await interaction.followup.send("Couldn't render the family tree.")
+            return
 
     @app_commands.command(name="marry", description="Propose to marry another user.")
     @app_commands.guild_only()
