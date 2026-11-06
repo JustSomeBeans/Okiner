@@ -225,6 +225,12 @@ class MarriageContainer(discord.ui.Container):
         self.add_item(action_row)
 
     async def accept_callback(self, interaction: discord.Interaction):
+        if self.view._resolved:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("This proposal was already answered.", ephemeral=True)
+            return
+        self.view._resolved = True
+
         proposed_id = interaction.user.id
         proposee_id = self.original_interaction.user.id
         marriage_candidates = [proposed_id, proposee_id]
@@ -233,28 +239,49 @@ class MarriageContainer(discord.ui.Container):
         try:
             await add_marriage(marriage_candidates[0], marriage_candidates[1], int(time.time()))
         except sqlite3.IntegrityError:
+            self.view._resolved = False
             await interaction.response.send_message(
                 "You or your partner are already married, or a conflicting relationship record exists.",
                 ephemeral=True,
             )
             return
         except Exception:
+            self.view._resolved = False
             logging.exception("Failed to create marriage record")
             await interaction.response.send_message(
                 "I couldn't save the marriage right now because of a database issue. Please try again later.",
                 ephemeral=True,
             )
             return
-        await self.end()
-        await interaction.response.edit_message(content=None, view=self.view)
-        await interaction.followup.send(f"<3 <3 Congratulations, {interaction.user.mention} and {self.original_interaction.user.mention}! You both are now happily married together! You may now kiss!")
-        self.view.stop()
+
+        try:
+            await self.end()
+            await interaction.response.edit_message(content=None, view=self.view)
+            await interaction.followup.send(
+                f"<3 <3 Congratulations, {interaction.user.mention} and {self.original_interaction.user.mention}! You both are now happily married together! You may now kiss!",
+                allowed_mentions=discord.AllowedMentions(users=[interaction.user, self.original_interaction.user]),
+            )
+            self.view.stop()
+        finally:
+            self.view._release()
 
     async def reject_callback(self, interaction: discord.Interaction):
-        await self.end()
-        await interaction.response.edit_message(content=None, view=self.view)
-        await interaction.followup.send(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your proposal...")
-        self.view.stop()
+        if self.view._resolved:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("This proposal was already answered.", ephemeral=True)
+            return
+        self.view._resolved = True
+
+        try:
+            await self.end()
+            await interaction.response.edit_message(content=None, view=self.view)
+            await interaction.followup.send(
+                f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your proposal...",
+                allowed_mentions=discord.AllowedMentions(users=[interaction.user, self.original_interaction.user]),
+            )
+            self.view.stop()
+        finally:
+            self.view._release()
 
     async def end(self):
         for child in self.children:
@@ -265,29 +292,47 @@ class MarriageContainer(discord.ui.Container):
 
 class MarriageConfirmView(discord.ui.LayoutView):
     """Marriage confirmation view when a user requests for marriage (so they don't get raped)"""
-    def __init__(self, interaction: discord.Interaction, target: discord.User) -> None:
+    def __init__(self, interaction: discord.Interaction, target: discord.User, on_done: Callable[[], None] | None = None) -> None:
         super().__init__()
         self.target = target
         self.interaction = interaction
+        self._on_done = on_done
+        self._released = False
+        self._resolved = False
 
         self.container = container = MarriageContainer(interaction=interaction, target=target, accent_color=0x7289da)
         self.add_item(container)
+
+    def _release(self) -> None:
+        if not self._released:
+            self._released = True
+            if self._on_done:
+                try:
+                    self._on_done()
+                except Exception:
+                    logging.exception("Failed in proposal on_done callback")
     
     async def on_timeout(self) -> None:
-        for child in self.container.children:
-            if isinstance(child, discord.ui.ActionRow):
-                for item in child.children:
-                    if hasattr(item, 'disabled'):
-                        item.disabled = True
-        
         try:
-            await self.interaction.edit_original_response(content=None, view=self)
-        except (discord.NotFound, discord.HTTPException):
-            pass
-        try:
-            await self.interaction.followup.send(f"The proposal is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
-        except (discord.NotFound, discord.HTTPException):
-            pass
+            for child in self.container.children:
+                if isinstance(child, discord.ui.ActionRow):
+                    for item in child.children:
+                        if hasattr(item, 'disabled'):
+                            item.disabled = True
+            
+            try:
+                await self.interaction.edit_original_response(content=None, view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            try:
+                await self.interaction.followup.send(
+                    f"The proposal is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....",
+                    allowed_mentions=discord.AllowedMentions(users=[self.target]),
+                )
+            except (discord.NotFound, discord.HTTPException):
+                pass
+        finally:
+            self._release()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.target.id:
@@ -300,29 +345,47 @@ class MarriageConfirmView(discord.ui.LayoutView):
 
 class AdoptionConfirmView(discord.ui.LayoutView):
     """Adoption confirmation view when a user wants to adopt another one."""
-    def __init__(self, interaction: discord.Interaction, target: discord.User) -> None:
+    def __init__(self, interaction: discord.Interaction, target: discord.User, on_done: Callable[[], None] | None = None) -> None:
         super().__init__()
         self.target = target
         self.interaction = interaction
+        self._on_done = on_done
+        self._released = False
+        self._resolved = False
 
         self.container = container = AdoptContainer(interaction=interaction, target=target, accent_color=0x7289da)
         self.add_item(container)
+
+    def _release(self) -> None:
+        if not self._released:
+            self._released = True
+            if self._on_done:
+                try:
+                    self._on_done()
+                except Exception:
+                    logging.exception("Failed in proposal on_done callback")
     
     async def on_timeout(self) -> None:
-        for child in self.container.children:
-            if isinstance(child, discord.ui.ActionRow):
-                for item in child.children:
-                    if hasattr(item, 'disabled'):
-                        item.disabled = True
-        
         try:
-            await self.interaction.edit_original_response(content=None, view=self)
-        except (discord.NotFound, discord.HTTPException):
-            pass
-        try:
-            await self.interaction.followup.send(f"The adoption is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....")
-        except (discord.NotFound, discord.HTTPException):
-            pass
+            for child in self.container.children:
+                if isinstance(child, discord.ui.ActionRow):
+                    for item in child.children:
+                        if hasattr(item, 'disabled'):
+                            item.disabled = True
+            
+            try:
+                await self.interaction.edit_original_response(content=None, view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            try:
+                await self.interaction.followup.send(
+                    f"The adoption is automatically rejected because {self.target.mention} didn't respond in time! How unfortunate....",
+                    allowed_mentions=discord.AllowedMentions(users=[self.target]),
+                )
+            except (discord.NotFound, discord.HTTPException):
+                pass
+        finally:
+            self._release()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.target.id:
@@ -351,34 +414,61 @@ class AdoptContainer(discord.ui.Container):
         self.add_item(action_row)
 
     async def accept_callback(self, interaction: discord.Interaction):
+        if self.view._resolved:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("This proposal was already answered.", ephemeral=True)
+            return
+        self.view._resolved = True
+
         child_id = interaction.user.id
         parent_id = self.original_interaction.user.id
 
         try:
             await add_child(child_id, parent_id, int(time.time()))
         except sqlite3.IntegrityError:
+            self.view._resolved = False
             await interaction.response.send_message(
                 "You already have a parent or this adoption relationship already exists.",
                 ephemeral=True,
             )
             return
         except Exception:
+            self.view._resolved = False
             logging.exception("Failed to create child record")
             await interaction.response.send_message(
                 "I couldn't save the adoption right now because of a database issue. Please try again later.",
                 ephemeral=True,
             )
             return
-        await self.end()
-        await interaction.response.edit_message(content=None, view=self.view)
-        await interaction.followup.send(f"<3 <3 Congratulations, {interaction.user.mention}! You now have {self.original_interaction.user.mention} as your new parent!")
-        self.view.stop()
+
+        try:
+            await self.end()
+            await interaction.response.edit_message(content=None, view=self.view)
+            await interaction.followup.send(
+                f"<3 <3 Congratulations, {interaction.user.mention}! You now have {self.original_interaction.user.mention} as your new parent!",
+                allowed_mentions=discord.AllowedMentions(users=[interaction.user, self.original_interaction.user]),
+            )
+            self.view.stop()
+        finally:
+            self.view._release()
 
     async def reject_callback(self, interaction: discord.Interaction):
-        await self.end()
-        await interaction.response.edit_message(content=None, view=self.view)
-        await interaction.followup.send(f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your adoption request...")
-        self.view.stop()
+        if self.view._resolved:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("This proposal was already answered.", ephemeral=True)
+            return
+        self.view._resolved = True
+
+        try:
+            await self.end()
+            await interaction.response.edit_message(content=None, view=self.view)
+            await interaction.followup.send(
+                f"Awh... sorry {self.original_interaction.user.mention}, but {interaction.user.mention} rejected your adoption request...",
+                allowed_mentions=discord.AllowedMentions(users=[interaction.user, self.original_interaction.user]),
+            )
+            self.view.stop()
+        finally:
+            self.view._release()
     
     async def end(self):
         for child in self.children:

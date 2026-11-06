@@ -33,6 +33,7 @@ class FamilyCommands(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._pending_proposals: set[tuple[str, int, int]] = set()
 
     # ------------------------------------------------------------------ #
     #  Family tree helpers                                               #
@@ -392,8 +393,9 @@ class FamilyCommands(commands.Cog):
 
     @app_commands.command(name="marry", description="Propose to marry another user.")
     @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, 30.0, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(user="Who to marry")
-    async def marry(self, interaction: discord.Interaction, user: discord.User):
+    async def marry(self, interaction: discord.Interaction, user: discord.Member):
         if user.id == interaction.user.id:
             await interaction.response.send_message("You can't marry yourself... </3")
             return
@@ -402,32 +404,47 @@ class FamilyCommands(commands.Cog):
             await interaction.response.send_message("We marrying clankers now? :wilted_rose: :sob: :v:")
             return
 
-        proposee_id = interaction.user.id
-        proposed_id = user.id
-        marriage_candidates = [proposee_id, proposed_id]
-        marriage_candidates.sort()
-
-        existing_marriage = await fetch_one("SELECT 1 FROM marriages WHERE spouse1_id = ? AND spouse2_id = ?", (marriage_candidates[0], marriage_candidates[1]))
-
-        if existing_marriage:
-            await interaction.response.send_message(f"Silly! You're already happily (hopefully) married with **{user.display_name}**!")
+        key = ("marry", interaction.user.id, user.id)
+        if key in self._pending_proposals:
+            await interaction.response.send_message(f"You already have a pending proposal to **{user.display_name}**.", ephemeral=True)
             return
+        self._pending_proposals.add(key)
 
-        existing_spouse = await fetch_one(
-            "SELECT 1 FROM marriages WHERE spouse1_id IN (?, ?) OR spouse2_id IN (?, ?)",
-            (
-                marriage_candidates[0],
-                marriage_candidates[1],
-                marriage_candidates[0],
-                marriage_candidates[1],
-            ),
-        )
+        handed_off = False
+        try:
+            proposee_id = interaction.user.id
+            proposed_id = user.id
+            marriage_candidates = [proposee_id, proposed_id]
+            marriage_candidates.sort()
 
-        if existing_spouse:
-            await interaction.response.send_message("One of you is already married. Divorce first before proposing again.")
-            return
+            existing_marriage = await fetch_one("SELECT 1 FROM marriages WHERE spouse1_id = ? AND spouse2_id = ?", (marriage_candidates[0], marriage_candidates[1]))
 
-        await interaction.response.send_message(view=MarriageConfirmView(interaction, user)) 
+            if existing_marriage:
+                await interaction.response.send_message(f"Silly! You're already happily (hopefully) married with **{user.display_name}**!")
+                return
+
+            existing_spouse = await fetch_one(
+                "SELECT 1 FROM marriages WHERE spouse1_id IN (?, ?) OR spouse2_id IN (?, ?)",
+                (
+                    marriage_candidates[0],
+                    marriage_candidates[1],
+                    marriage_candidates[0],
+                    marriage_candidates[1],
+                ),
+            )
+
+            if existing_spouse:
+                await interaction.response.send_message("One of you is already married. Divorce first before proposing again.")
+                return
+
+            await interaction.response.send_message(
+                view=MarriageConfirmView(interaction, user, on_done=lambda: self._pending_proposals.discard(key)),
+                allowed_mentions=discord.AllowedMentions(users=[user]),
+            )
+            handed_off = True
+        finally:
+            if not handed_off:
+                self._pending_proposals.discard(key)
 
     @app_commands.command(name="divorce", description="Divorce a user you have married.")
     @app_commands.guild_only()
@@ -457,8 +474,9 @@ class FamilyCommands(commands.Cog):
     
     @app_commands.command(name="adopt", description="Adopt a user as your child.")
     @app_commands.guild_only()
+    @app_commands.checks.cooldown(1, 30.0, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(user="Who to adopt")
-    async def adopt(self, interaction: discord.Interaction, user: discord.User):
+    async def adopt(self, interaction: discord.Interaction, user: discord.Member):
         if user.id == interaction.user.id:
             await interaction.response.send_message("You can't adopt yourself...")
             return
@@ -467,25 +485,40 @@ class FamilyCommands(commands.Cog):
             await interaction.response.send_message("We adopting clankers now? :wilted_rose: :sob: :v:")
             return
         
-        soon_to_be_parent_id = interaction.user.id
-        soon_to_be_child_id = user.id
-
-        existing_offspring = await fetch_one("SELECT 1 FROM children WHERE child_id = ? AND parent_id = ?", (soon_to_be_child_id, soon_to_be_parent_id))
-
-        if existing_offspring:
-            await interaction.response.send_message(f"Nuh uh! You already have adopted **{user.display_name}** as your child!")
+        key = ("adopt", interaction.user.id, user.id)
+        if key in self._pending_proposals:
+            await interaction.response.send_message(f"You already have a pending proposal to **{user.display_name}**.", ephemeral=True)
             return
+        self._pending_proposals.add(key)
 
-        existing_parent = await fetch_one(
-            "SELECT 1 FROM children WHERE child_id = ?",
-            (soon_to_be_child_id,),
-        )
+        handed_off = False
+        try:
+            soon_to_be_parent_id = interaction.user.id
+            soon_to_be_child_id = user.id
 
-        if existing_parent:
-            await interaction.response.send_message(f"**{user.display_name}** already has a parent!")
-            return
+            existing_offspring = await fetch_one("SELECT 1 FROM children WHERE child_id = ? AND parent_id = ?", (soon_to_be_child_id, soon_to_be_parent_id))
 
-        await interaction.response.send_message(view=AdoptionConfirmView(interaction, user)) 
+            if existing_offspring:
+                await interaction.response.send_message(f"Nuh uh! You already have adopted **{user.display_name}** as your child!")
+                return
+
+            existing_parent = await fetch_one(
+                "SELECT 1 FROM children WHERE child_id = ?",
+                (soon_to_be_child_id,),
+            )
+
+            if existing_parent:
+                await interaction.response.send_message(f"**{user.display_name}** already has a parent!")
+                return
+
+            await interaction.response.send_message(
+                view=AdoptionConfirmView(interaction, user, on_done=lambda: self._pending_proposals.discard(key)),
+                allowed_mentions=discord.AllowedMentions(users=[user]),
+            )
+            handed_off = True
+        finally:
+            if not handed_off:
+                self._pending_proposals.discard(key) 
     
     @app_commands.command(name="disown", description="Disown a child of yours.")
     @app_commands.guild_only()
