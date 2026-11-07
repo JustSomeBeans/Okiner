@@ -5,6 +5,7 @@ class TestBotConfig(unittest.TestCase):
     def test_permissions(self):
         self.assertTrue(requested_permissions.ban_members)
         self.assertTrue(requested_permissions.manage_messages)
+        self.assertTrue(requested_permissions.read_message_history)
         self.assertFalse(requested_permissions.manage_roles)
 
         # Removed permissions must be False

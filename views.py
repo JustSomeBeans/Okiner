@@ -18,7 +18,7 @@ import sqlite3
 import time
 
 from checks import has_manage_messages
-from config import EVERYONE_TARGET, MAX_URL_LENGTH, SELF_CASE, STANDARD_CASE
+from config import MAX_URL_LENGTH, SELF_CASE, STANDARD_CASE
 from database import add_child, add_marriage, add_rp_entry, execute_query, fetch_column, remove_rp_entry, update_rp_entry
 from utils import PlaceholderTarget, is_imgur_page_url, is_valid_image_url, normalize_image_url
 

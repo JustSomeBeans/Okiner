@@ -46,6 +46,7 @@ requested_permissions = discord.Permissions(
     view_channel=True,
     ban_members=True,
     manage_messages=True,
+    read_message_history=True,
 )
 
 

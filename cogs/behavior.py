@@ -107,7 +107,7 @@ class Behavior(commands.Cog):
             (guild_id,)
         )
         database.invalidate_guild_config(guild_id)
-        await interaction.response.send_message("Automatic unverification system enabled.", ephemeral=True)
+        await interaction.response.send_message("Unverification setting saved, but the automatic sweep is not active yet, so no members will be unverified automatically.", ephemeral=True)
 
     # default_permissions is a UI hint, not a security boundary
     @app_commands.command(name="disableunverification", description="Turns off the automatic unverification sweep.")

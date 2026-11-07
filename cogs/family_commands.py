@@ -8,7 +8,7 @@ import networkx as nx
 from discord import app_commands
 from discord.ext import commands
 from PIL import Image, ImageDraw, ImageFont
-from database import add_rp_entry, execute_write, fetch_one
+from database import execute_write, fetch_one
 from views import MarriageConfirmView, AdoptionConfirmView
 
 BACKGROUND_COLOR = (248, 250, 252)
