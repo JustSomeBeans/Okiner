@@ -931,7 +931,8 @@ class ManageRPEntriesView(discord.ui.View):
         if not self.entries:
             return f"Managing `{self.rp_type}` ({self.pool}): No entries remaining."
         entry = self.entries[self.page]
-        return f"Managing `{self.rp_type}` ({self.pool}) — Entry {self.page + 1} of {len(self.entries)}:\n```\n{entry}\n```"
+        safe_entry = entry.replace("```", "'''")
+        return f"Managing `{self.rp_type}` ({self.pool}) — Entry {self.page + 1} of {len(self.entries)}:\n```\n{safe_entry}\n```"
 
     def render_kwargs(self) -> dict:
         if not self.entries or self.column != "url":

@@ -275,9 +275,8 @@ class RPCommands(commands.Cog):
             if action_texts
             else self._default_action(interaction.user, target_info, case_type)
         )
-        action_line = truncate_for_embed(
-            f"**{raw_action}**", MAX_EMBED_DESCRIPTION_LENGTH
-        )
+        truncated_action = truncate_for_embed(raw_action, MAX_EMBED_DESCRIPTION_LENGTH - 4)
+        action_line = f"**{truncated_action}**"
         if texts:
             raw_text = apply_placeholders(
                 random.choice(texts), interaction.user, target_info

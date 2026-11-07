@@ -15,6 +15,7 @@ from __future__ import annotations
 # =============================================================================
 
 from dataclasses import dataclass
+import re
 from urllib.parse import urlparse
 
 import discord
@@ -59,11 +60,18 @@ def apply_placeholders(
     target: PlaceholderTarget,
 ) -> str:
     """Fill supported placeholders inside RP text."""
-    return (
-        template.replace("{user}", actor.mention)
-        .replace("{target}", target.mention)
-        .replace("{user_name}", actor.display_name)
-        .replace("{target_name}", target.display_name)
+    def safe(n: str) -> str:
+        return discord.utils.escape_markdown(discord.utils.escape_mentions(n))
+    values = {
+        "user": actor.mention,
+        "target": target.mention,
+        "user_name": safe(actor.display_name),
+        "target_name": safe(target.display_name),
+    }
+    return re.sub(
+        r"\{(user_name|target_name|user|target)\}",
+        lambda m: values[m.group(1)],
+        template,
     )
 
 
