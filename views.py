@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 # =============================================================================
 
 import discord
+from math import ceil
 import logging
 import sqlite3
 import time
@@ -134,6 +135,7 @@ class RPBackView(discord.ui.View):
         self.original_actor_id = original_actor_id
         self.target_id = target_id
         self.guild_id = guild_id
+        self._used = False
         self.back.label = f"{rp_type} back"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -182,6 +184,15 @@ class RPBackView(discord.ui.View):
             )
             return
 
+        if self.target_id is not None:
+            if self._used:
+                await interaction.response.send_message(
+                    "This button was already used.",
+                    ephemeral=True,
+                )
+                return
+            self._used = True
+
         target_info = PlaceholderTarget(member.mention, member.display_name)
         case_type = (
             SELF_CASE
@@ -189,12 +200,17 @@ class RPBackView(discord.ui.View):
             else STANDARD_CASE
         )
 
-        await self.cog._execute_rp(
+        res = await self.cog._execute_rp(
             interaction,
             self.rp_type,
             target_info,
             case_type,
         )
+
+        if res is None:
+            if self.target_id is not None:
+                self._used = False
+            return
 
         if self.target_id is not None:
             button.disabled = True
@@ -718,6 +734,9 @@ class EditRPModal(discord.ui.Modal):
         )
 
 
+TYPES_PER_PAGE = 25
+
+
 class ManageRPView(discord.ui.View):
     """Step 1 & 2 of /manage_rp: selecting RP type and data pool."""
 
@@ -730,13 +749,49 @@ class ManageRPView(discord.ui.View):
         self.cog = cog
         self.selected_type: str | None = None
         self.selected_pool: str | None = None
+        self.type_page = 0
+        self._build_type_screen()
 
+    def _page_count(self) -> int:
+        return max(1, ceil(len(self.rp_types) / TYPES_PER_PAGE))
+
+    def _build_type_screen(self) -> str:
+        self.clear_items()
+        self.selected_type = None
+        start = self.type_page * TYPES_PER_PAGE
+        end = start + TYPES_PER_PAGE
+        page_types = self.rp_types[start:end]
         self.type_select = discord.ui.Select(
             placeholder="Select RP type to manage...",
-            options=[discord.SelectOption(label=t[:100], value=t) for t in rp_types[:25]],
+            options=[discord.SelectOption(label=t[:100], value=t) for t in page_types],
         )
         self.type_select.callback = self.type_select_callback
         self.add_item(self.type_select)
+
+        page_cnt = self._page_count()
+        if page_cnt > 1:
+            prev_button = discord.ui.Button(label="◀ Prev types", style=discord.ButtonStyle.secondary, disabled=(self.type_page == 0))
+            prev_button.callback = self.type_prev_callback
+            self.add_item(prev_button)
+
+            next_button = discord.ui.Button(label="Next types ▶", style=discord.ButtonStyle.secondary, disabled=(self.type_page >= page_cnt - 1))
+            next_button.callback = self.type_next_callback
+            self.add_item(next_button)
+
+            return f"Select an RP type to manage (page {self.type_page + 1} of {page_cnt}, {len(self.rp_types)} types):"
+        return "Select an RP type to manage:"
+
+    async def type_prev_callback(self, interaction: discord.Interaction) -> None:
+        if self.type_page > 0:
+            self.type_page -= 1
+        content = self._build_type_screen()
+        await interaction.response.edit_message(content=content, embed=None, view=self)
+
+    async def type_next_callback(self, interaction: discord.Interaction) -> None:
+        if self.type_page < self._page_count() - 1:
+            self.type_page += 1
+        content = self._build_type_screen()
+        await interaction.response.edit_message(content=content, embed=None, view=self)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -789,15 +844,8 @@ class ManageRPView(discord.ui.View):
         await interaction.response.edit_message(content=f"Managing RP type: **{self.selected_type}**", view=self)
 
     async def back_to_types_callback(self, interaction: discord.Interaction) -> None:
-        self.clear_items()
-        self.selected_type = None
-        self.type_select = discord.ui.Select(
-            placeholder="Select RP type to manage...",
-            options=[discord.SelectOption(label=t[:100], value=t) for t in self.rp_types[:25]],
-        )
-        self.type_select.callback = self.type_select_callback
-        self.add_item(self.type_select)
-        await interaction.response.edit_message(content="Select an RP type to manage:", view=self)
+        content = self._build_type_screen()
+        await interaction.response.edit_message(content=content, embed=None, view=self)
 
     async def pool_select_callback(self, interaction: discord.Interaction) -> None:
         self.selected_pool = interaction.data["values"][0]

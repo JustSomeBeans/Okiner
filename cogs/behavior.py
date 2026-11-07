@@ -257,6 +257,49 @@ class Behavior(commands.Cog):
         async with self._flush_lock:
             self._emoji_react[(guild_id, emoji_id)] = self._emoji_react.get((guild_id, emoji_id), 0) + 1
 
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member) -> None:
+        if getattr(member, "bot", False):
+            return
+        guild_id = member.guild.id
+        user_id = member.id
+        try:
+            async with self._flush_lock:
+                self._messages.pop((guild_id, user_id), None)
+            await database.execute_query(
+                "DELETE FROM member_behavior WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            )
+        except Exception:
+            logging.exception("Failed to handle member remove behavior cleanup")
+        # Note: a flush that is already in-flight (snapshot taken before removal) can re-insert rows for a removed guild/member once; this limitation is documented and ignored.
+
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        guild_id = guild.id
+        try:
+            async with self._flush_lock:
+                for k in [k for k in self._messages if k[0] == guild_id]:
+                    self._messages.pop(k, None)
+                for k in [k for k in self._emoji_msg if k[0] == guild_id]:
+                    self._emoji_msg.pop(k, None)
+                for k in [k for k in self._emoji_react if k[0] == guild_id]:
+                    self._emoji_react.pop(k, None)
+
+            statements = [
+                ("DELETE FROM guild_configs WHERE guild_id = ?", [(guild_id,)]),
+                ("DELETE FROM scan_channels WHERE guild_id = ?", [(guild_id,)]),
+                ("DELETE FROM member_behavior WHERE guild_id = ?", [(guild_id,)]),
+                ("DELETE FROM guild_emojis WHERE guild_id = ?", [(guild_id,)]),
+                ("DELETE FROM rp_types WHERE guild_id = ?", [(guild_id,)]),
+            ]
+            await database.execute_batch(statements)
+        except Exception:
+            logging.exception("Failed to handle guild remove cleanup")
+        finally:
+            database.invalidate_guild_config(guild_id)
+        # Note: a flush that is already in-flight (snapshot taken before removal) can re-insert rows for a removed guild/member once; this limitation is documented and ignored.
+
     @tasks.loop(hours=6)
     async def inactivity_sweep(self) -> None:
         # Periodic check for inactive verified members when enabled
