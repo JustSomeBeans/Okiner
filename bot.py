@@ -6,6 +6,7 @@ from __future__ import annotations
 # Imported by:  main.py    → OkinerBot
 # Imports from: config.py  → DB_PATH, SCHEMA_PATH
 #               database.py → set_bot  (called in setup_hook to wire the pool)
+#               migrations.py → run_migrations (called in setup_hook)
 #               discord    → discord.Intents, discord.Permissions
 #               discord.ext.commands → commands.Bot
 #               asqlite    → asqlite.Pool, asqlite.create_pool
@@ -13,37 +14,39 @@ from __future__ import annotations
 # Loads extension: cogs.rp_commands  (registered in setup_hook)
 # =============================================================================
 
+import asyncio
 import logging
 import os
 from urllib.parse import urlencode
 
 import asqlite
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 import database
+import migrations
 from config import DB_PATH, SCHEMA_PATH
 
 APPLICATION_ID = os.getenv("DISCORD_APPLICATION_ID")
 # APPLICATION_ID is optional — without it the bot still works, it just won't log an invite URL at startup.
 
 intents = discord.Intents.default()
-intents.presences = True
-intents.members = True
-intents.message_content = True
+intents.presences = False  # not needed
+intents.members = True     # member lookup/autocomplete and join data
+intents.message_content = True  # emoji tracking and the oki!sync prefix command
 
 requested_permissions = discord.Permissions(
-    add_reactions=True,
     attach_files=True,
-    change_nickname=True,
     embed_links=True,
     send_messages=True,
     send_messages_in_threads=True,
     use_external_emojis=True,
-    use_external_stickers=True,
     use_application_commands=True,
-    view_audit_log=True,
     view_channel=True,
+    ban_members=True,
+    manage_messages=True,
+    read_message_history=True,
 )
 
 
@@ -58,6 +61,54 @@ def build_invite_url(application_id: str) -> str:
     return f"https://discord.com/oauth2/authorize?{query}"
 
 
+class OkinerTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            if interaction.type is discord.InteractionType.application_command:
+                if not interaction.response.is_done():
+                    try:
+                        await interaction.response.send_message(
+                            "This command only works in a server.", ephemeral=True
+                        )
+                    except discord.HTTPException:
+                        pass
+            return False
+        return True
+
+    async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        original = error.original if isinstance(error, app_commands.CommandInvokeError) else error
+
+        if isinstance(original, app_commands.MissingPermissions):
+            msg = "You don't have permission to do that."
+        elif isinstance(original, app_commands.BotMissingPermissions):
+            msg = "I'm missing permissions I need for that."
+        elif isinstance(original, app_commands.NoPrivateMessage):
+            msg = "This command only works in a server."
+        elif isinstance(original, app_commands.CommandOnCooldown):
+            msg = f"Slow down. Try again in {original.retry_after:.0f}s."
+        elif isinstance(original, app_commands.CheckFailure):
+            msg = "You can't use that command here."
+        else:
+            cmd_name = interaction.command.qualified_name if interaction.command else "unknown"
+            logging.error(
+                "Unhandled application command error in %r",
+                cmd_name,
+                exc_info=(type(original), original, original.__traceback__),
+            )
+            msg = "Something went wrong. Please try again later."
+
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.send_message(msg, ephemeral=True)
+            except discord.HTTPException:
+                logging.warning("Failed to send ephemeral error response")
+        else:
+            try:
+                await interaction.followup.send(msg, ephemeral=True)
+            except discord.HTTPException:
+                logging.warning("Failed to send ephemeral error followup")
+
+
 class OkinerBot(commands.Bot):
     def __init__(self) -> None:
         super().__init__(
@@ -65,152 +116,41 @@ class OkinerBot(commands.Bot):
             command_prefix="oki!",
             application_id=int(APPLICATION_ID) if APPLICATION_ID else None,
             help_command=None,
+            tree_cls=OkinerTree,
         )
         self.db_pool: asqlite.Pool | None = None
 
     async def setup_hook(self) -> None:
-        self.db_pool = await asqlite.create_pool(DB_PATH)
+        schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
+        applied = await asyncio.to_thread(migrations.run_migrations, DB_PATH, schema_sql)
+        if applied:
+            logging.info("Applied database migrations: %s", applied)
+
+        self.db_pool = await asqlite.create_pool(DB_PATH, init=database.init_connection)
         database.set_bot(self)
+        await database.assert_connection_pragmas()
 
-        async with self.db_pool.acquire() as conn:
-            # Enable foreign key enforcement — SQLite has it off by default.
-            # We also do this per-connection in execute_query, but doing it here
-            # ensures the schema creation itself (with the FK definition) is consistent.
-            await conn.execute("PRAGMA foreign_keys = ON")
-            # executescript runs the full SQL file — safe to call every startup
-            # because every table uses CREATE TABLE IF NOT EXISTS.
-            await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-            table_info = await conn.execute("PRAGMA table_info(roleplay_entries)")
-            columns = {row[1] for row in await table_info.fetchall()}
-            if "case_type" not in columns:
-                await conn.executescript(
-                    """
-                    ALTER TABLE roleplay_entries RENAME TO roleplay_entries_legacy;
-
-                    CREATE TABLE roleplay_entries (
-                        user_id INTEGER NOT NULL,
-                        guild_id INTEGER NOT NULL,
-                        type TEXT NOT NULL,
-                        case_type TEXT NOT NULL DEFAULT 'standard',
-                        url TEXT,
-                        texts TEXT,
-                        action_texts TEXT,
-                        PRIMARY KEY (user_id, guild_id, type, case_type, url, texts, action_texts),
-                        FOREIGN KEY (guild_id, type)
-                            REFERENCES rp_types(guild_id, type)
-                            ON DELETE CASCADE
-                    );
-
-                    INSERT INTO roleplay_entries (user_id, guild_id, type, case_type, url, texts, action_texts)
-                    SELECT user_id, guild_id, type, 'standard', url, texts, action_texts
-                    FROM roleplay_entries_legacy;
-
-                    DROP TABLE roleplay_entries_legacy;
-                    """
+        try:
+            multi_users = await database.find_multi_marriage_users()
+            if multi_users:
+                preview = multi_users[:20]
+                logging.warning(
+                    "Found %d users appearing in multiple marriage rows (from before integrity triggers existed; first 20: %s). Manual review required.",
+                    len(multi_users),
+                    preview,
                 )
+        except Exception:
+            logging.exception("Failed to check for multi-marriage users during startup")
 
-            legacy_self = await conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='rp_self_cases'"
-            )
-            if await legacy_self.fetchone():
-                await conn.executescript(
-                    """
-                    INSERT OR IGNORE INTO roleplay_entries
-                        (user_id, guild_id, type, case_type, url, texts, action_texts)
-                    SELECT
-                        0, -- Placeholder for missing user_id in legacy table
-                        guild_id,
-                        type,
-                        'selfcase',
-                        url,
-                        texts,
-                        action_texts
-                    FROM rp_self_cases;
-
-                    DROP TABLE rp_self_cases;
-                    """
-                )
-
-            children_table_info = await conn.execute("PRAGMA table_info(children)")
-            children_columns = {row[1] for row in await children_table_info.fetchall()}
-            children_indexes = await conn.execute("PRAGMA index_list(children)")
-            children_index_rows = await children_indexes.fetchall()
-            parent_unique = False
-            for index_row in children_index_rows:
-                if not index_row[2]:
-                    continue
-                index_name = index_row[1]
-                index_info = await conn.execute(f"PRAGMA index_info({index_name!r})")
-                indexed_columns = [row[2] for row in await index_info.fetchall()]
-                if indexed_columns == ["parent_id"]:
-                    parent_unique = True
-                    break
-            if children_columns and parent_unique:
-                await conn.executescript(
-                    """
-                    ALTER TABLE children RENAME TO children_legacy;
-
-                    CREATE TABLE children (
-                        offspring_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        child_id INTEGER UNIQUE NOT NULL,
-                        parent_id INTEGER NOT NULL,
-                        adoption_date TEXT
-                    );
-
-                    INSERT INTO children (offspring_id, child_id, parent_id, adoption_date)
-                    SELECT offspring_id, child_id, parent_id, adoption_date
-                    FROM children_legacy;
-
-                    DROP TABLE children_legacy;
-                    """
-                )
-
-            marriages_table_info = await conn.execute("PRAGMA table_info(marriages)")
-            marriages_columns = {row[1] for row in await marriages_table_info.fetchall()}
-            marriages_indexes = await conn.execute("PRAGMA index_list(marriages)")
-            marriages_index_rows = await marriages_indexes.fetchall()
-            spouse1_unique = False
-            spouse2_unique = False
-            for index_row in marriages_index_rows:
-                if not index_row[2]:
-                    continue
-                index_name = index_row[1]
-                index_info = await conn.execute(f"PRAGMA index_info({index_name!r})")
-                indexed_columns = [row[2] for row in await index_info.fetchall()]
-                if indexed_columns == ["spouse1_id"]:
-                    spouse1_unique = True
-                if indexed_columns == ["spouse2_id"]:
-                    spouse2_unique = True
-            if marriages_columns and (not spouse1_unique or not spouse2_unique):
-                await conn.executescript(
-                    """
-                    ALTER TABLE marriages RENAME TO marriages_legacy;
-
-                    CREATE TABLE marriages (
-                        marriage_id INTEGER PRIMARY KEY,
-                        spouse1_id INTEGER UNIQUE NOT NULL,
-                        spouse2_id INTEGER UNIQUE NOT NULL,
-                        marriage_date TEXT,
-                        UNIQUE (spouse1_id, spouse2_id)
-                    );
-
-                    INSERT INTO marriages (marriage_id, spouse1_id, spouse2_id, marriage_date)
-                    SELECT marriage_id, spouse1_id, spouse2_id, marriage_date
-                    FROM marriages_legacy;
-
-                    DROP TABLE marriages_legacy;
-                    """
-                )
-            await conn.commit()
-            
         await self.load_extension("cogs.rp_commands")
         await self.load_extension("cogs.family_commands")
-
+        await self.load_extension("cogs.moderation")
+        await self.load_extension("cogs.behavior")
 
     async def close(self) -> None:
+        await super().close()
         if self.db_pool is not None:
             await self.db_pool.close()
-        await super().close()
 
     async def on_ready(self) -> None:
         logging.info(

@@ -24,14 +24,13 @@ from __future__ import annotations
 #                                 AppCommandError, MissingPermissions,
 #                                 NoPrivateMessage, CommandOnCooldown
 #               discord.ext.commands → commands.Bot, commands.Cog
-#               urllib.parse    → urlparse
 #               logging, random, re → stdlib
 # =============================================================================
 
 import logging
 import random
 import re
-from urllib.parse import urlparse
+import sqlite3
 
 import discord
 from discord import app_commands
@@ -54,15 +53,46 @@ from utils import (
     PlaceholderTarget,
     apply_placeholders,
     build_list_messages,
+    is_imgur_page_url,
     is_valid_image_url,
     normalize_image_url,
     normalize_rp_type,
     truncate_for_embed,
 )
-from views import ActionTextConfirmView, RPBackView
+from views import ActionTextConfirmView, AddRPOptionsView, EditRPOptionsView, ManageRPView, RPBackView
 
 TARGET_MENTION_RE = re.compile(r"<@!?(\d+)>")
 ALLOWED_COLUMNS = {"texts", "action_texts"} # guard against SQL injection in _fetch_case_entries
+
+
+def build_rp_payload(
+    image_url: str | None,
+    std_text: str | None,
+    std_action: str | None,
+    case_mode: str,
+    self_text: str | None,
+    null_text: str | None,
+) -> list[dict]:
+    """Build the full entries payload for all case types without touching Discord objects."""
+    entries = []
+    if image_url and image_url.strip():
+        entries.append({"case_type": STANDARD_CASE, "url": image_url.strip(), "text": None, "action_text": None})
+    if std_text and std_text.strip():
+        entries.append({"case_type": STANDARD_CASE, "url": None, "text": std_text.strip(), "action_text": None})
+    if std_action and std_action.strip():
+        entries.append({"case_type": STANDARD_CASE, "url": None, "text": None, "action_text": std_action.strip()})
+
+    if case_mode in {"self", "standard_self_null"}:
+        if self_text and self_text.strip():
+            st = self_text.strip()
+            if len(st) <= MAX_TEXT_LENGTH:
+                entries.append({"case_type": SELF_CASE, "url": None, "text": st, "action_text": None})
+    if case_mode in {"null", "standard_self_null"}:
+        if null_text and null_text.strip():
+            nt = null_text.strip()
+            if len(nt) <= MAX_TEXT_LENGTH:
+                entries.append({"case_type": NULL_CASE, "url": None, "text": nt, "action_text": None})
+    return entries
 
 
 async def send_chunked_response(
@@ -162,7 +192,7 @@ class RPCommands(commands.Cog):
             return PlaceholderTarget(EVERYONE_TARGET, EVERYONE_TARGET), STANDARD_CASE, None
         member = self._find_member(guild, raw_target)
         if member is None:
-            raise RuntimeError("_resolve_target called outside of a guild context")
+            return None
         return (
             PlaceholderTarget(member.mention, member.display_name),
             SELF_CASE if member.id == interaction.user.id else STANDARD_CASE,
@@ -245,9 +275,8 @@ class RPCommands(commands.Cog):
             if action_texts
             else self._default_action(interaction.user, target_info, case_type)
         )
-        action_line = truncate_for_embed(
-            f"**{raw_action}**", MAX_EMBED_DESCRIPTION_LENGTH
-        )
+        truncated_action = truncate_for_embed(raw_action, MAX_EMBED_DESCRIPTION_LENGTH - 4)
+        action_line = f"**{truncated_action}**"
         if texts:
             raw_text = apply_placeholders(
                 random.choice(texts), interaction.user, target_info
@@ -590,12 +619,24 @@ class RPCommands(commands.Cog):
     # ------------------------------------------------------------------ #
 
     @app_commands.command(
-        name="addtype", description="Add a new RP type to this server."
+        name="add_rp",
+        description="Create a new RP type and initial entries in a guided flow.",
     )
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_messages=True)
     @moderator_only()
-    async def add_type(self, interaction: discord.Interaction, rp_type: str) -> None:
+    @app_commands.describe(
+        rp_type="Name of the new RP type to create",
+        image_url="URL pointing to a 3rd party image host (optional if attaching image_file)",
+        image_file="Direct image file upload attachment (optional if providing image_url)",
+    )
+    async def add_rp(
+        self,
+        interaction: discord.Interaction,
+        rp_type: str,
+        image_url: str | None = None,
+        image_file: discord.Attachment | None = None,
+    ) -> None:
         rp_type = normalize_rp_type(rp_type)
         if not rp_type:
             await interaction.response.send_message(
@@ -615,447 +656,303 @@ class RPCommands(commands.Cog):
             return
         if await database.rp_type_exists(interaction.guild_id, rp_type):
             await interaction.response.send_message(
-                "That RP type already exists.", ephemeral=True
+                "That RP type already exists. Use `/edit_rp` instead.",
+                ephemeral=True,
             )
             return
-        await database.add_rp_type(interaction.guild_id, rp_type)
+
+        has_file = image_file is not None
+        has_url = image_url is not None and len(image_url.strip()) > 0
+
+        if not (has_file ^ has_url):
+            if not has_file and not has_url:
+                await interaction.response.send_message(
+                    "❌ **Error:** You must provide either an **image upload** OR an **image link**.",
+                    ephemeral=True,
+                )
+                return
+            else:
+                await interaction.response.send_message(
+                    "❌ **Error:** You cannot provide both an image upload and a link. Please choose only one option.",
+                    ephemeral=True,
+                )
+                return
+
+        resolved_image_url = None
+        if has_file:
+            if image_file.content_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+                await interaction.response.send_message(
+                    "❌ **Error:** Invalid image file type. Please upload a PNG, JPEG, WEBP, or GIF image.",
+                    ephemeral=True,
+                )
+                return
+            resolved_image_url = image_file.url
+        else:
+            resolved_image_url = normalize_image_url(image_url)
+            if is_imgur_page_url(resolved_image_url):
+                await interaction.response.send_message(
+                    "Please provide the direct image link. It should start with `i.imgur.com`, not `imgur.com`.",
+                    ephemeral=True,
+                )
+                return
+            if not is_valid_image_url(resolved_image_url):
+                await interaction.response.send_message(
+                    "That doesn't look like a valid `http` or `https` URL.", ephemeral=True
+                )
+                return
+            if len(resolved_image_url) > MAX_URL_LENGTH:
+                await interaction.response.send_message(
+                    "That URL is longer than I want to store safely.", ephemeral=True
+                )
+                return
+
+        view = AddRPOptionsView(interaction.user.id, rp_type, resolved_image_url, self)
         await interaction.response.send_message(
-            f"Added RP type `{rp_type}`.", ephemeral=True
+            f"Configuring new RP type `{rp_type}`. Select the case configuration mode:",
+            view=view,
+            ephemeral=True,
         )
+        view.message = await interaction.original_response()
+
+    async def _handle_add_rp_submission(
+        self,
+        interaction: discord.Interaction,
+        rp_type: str,
+        image_url: str,
+        std_text: str,
+        std_action: str,
+        case_mode: str,
+        self_text: str | None,
+        null_text: str | None,
+    ) -> None:
+        rp_type = normalize_rp_type(rp_type)
+        if await database.rp_type_exists(interaction.guild_id, rp_type):
+            await interaction.response.send_message(
+                "That RP type already exists. Use `/edit_rp` instead.",
+                ephemeral=True,
+            )
+            return
+
+        std_text = std_text.strip()
+        if not std_text or len(std_text) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Standard text must be between 1 and {MAX_TEXT_LENGTH} characters.", ephemeral=True
+            )
+            return
+
+        std_action = std_action.strip()
+        if not std_action or len(std_action) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Standard action text must be between 1 and {MAX_TEXT_LENGTH} characters.", ephemeral=True
+            )
+            return
+
+        if case_mode in {"self", "standard_self_null"} and self_text and len(self_text.strip()) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Selfcase text must be at most {MAX_TEXT_LENGTH} characters.", ephemeral=True
+            )
+            return
+
+        if case_mode in {"null", "standard_self_null"} and null_text and len(null_text.strip()) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(
+                f"Nullcase text must be at most {MAX_TEXT_LENGTH} characters.", ephemeral=True
+            )
+            return
+
+        entries = build_rp_payload(image_url, std_text, std_action, case_mode, self_text, null_text)
+
+        missing_std = [
+            tag
+            for tag in self._required_action_tags(STANDARD_CASE)
+            if tag not in std_action and tag.replace("}", "_name}") not in std_action
+        ]
+        if missing_std:
+            async def on_confirm(inter: discord.Interaction) -> None:
+                try:
+                    await database.create_rp_type_with_entries(
+                        inter.guild_id, inter.user.id, rp_type, entries
+                    )
+                    await inter.response.edit_message(
+                        content=f"Added standard action text to `{rp_type}` despite missing tags.",
+                        view=None,
+                    )
+                except sqlite3.IntegrityError:
+                    await inter.response.edit_message(
+                        content="That RP type already exists.",
+                        view=None,
+                    )
+
+            warning = (
+                f"Warning: your standard action text is missing the following dynamic tags: {', '.join(f'`{tag}`' for tag in missing_std)}.\n\n"
+                "Do you want to add it anyway?"
+            )
+            view = ActionTextConfirmView(
+                interaction.user.id,
+                interaction.guild_id,
+                rp_type,
+                std_action,
+                case_type=STANDARD_CASE,
+                on_confirm=on_confirm,
+            )
+            await interaction.response.send_message(warning, view=view, ephemeral=True)
+            view.message = await interaction.original_response()
+            return
+
+        try:
+            await database.create_rp_type_with_entries(
+                interaction.guild_id, interaction.user.id, rp_type, entries
+            )
+            await interaction.response.send_message(
+                f"Successfully created RP type `{rp_type}`!",
+                ephemeral=True,
+            )
+        except sqlite3.IntegrityError:
+            await interaction.response.send_message(
+                "That RP type already exists. Use `/edit_rp` instead.",
+                ephemeral=True,
+            )
 
     @app_commands.command(
-        name="removetype",
-        description="Remove an RP type and everything saved under it.",
+        name="edit_rp",
+        description="Append additional data to an existing RP type.",
     )
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_messages=True)
     @moderator_only()
+    @app_commands.describe(rp_type="Existing RP type to add data to")
     @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def remove_type(self, interaction: discord.Interaction, rp_type: str) -> None:
+    async def edit_rp(self, interaction: discord.Interaction, rp_type: str) -> None:
+        rp_type = normalize_rp_type(rp_type)
+        if not await database.rp_type_exists(interaction.guild_id, rp_type):
+            await interaction.response.send_message(
+                f"Unknown RP type `{rp_type}`. Use `/add_rp` to create it first.",
+                ephemeral=True,
+            )
+            return
+
+        view = EditRPOptionsView(interaction.user.id, rp_type, self)
+        await interaction.response.send_message(
+            f"Editing RP type `{rp_type}`. Select data pool to add to:",
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+
+    async def _handle_edit_rp_submission(
+        self,
+        interaction: discord.Interaction,
+        rp_type: str,
+        pool_type: str,
+        value: str,
+    ) -> None:
         rp_type = normalize_rp_type(rp_type)
         if not await database.rp_type_exists(interaction.guild_id, rp_type):
             await interaction.response.send_message("Unknown RP type.", ephemeral=True)
             return
-        await database.execute_query(
-            "DELETE FROM rp_types WHERE guild_id = ? AND type = ?",
-            (interaction.guild_id, rp_type),
+
+        value = value.strip()
+        if not value:
+            await interaction.response.send_message("Value cannot be blank.", ephemeral=True)
+            return
+
+        case_map = {
+            "std_img": (STANDARD_CASE, "url"),
+            "std_text": (STANDARD_CASE, "texts"),
+            "std_action": (STANDARD_CASE, "action_texts"),
+            "self_text": (SELF_CASE, "texts"),
+            "self_action": (SELF_CASE, "action_texts"),
+            "null_text": (NULL_CASE, "texts"),
+            "null_action": (NULL_CASE, "action_texts"),
+        }
+        case_type, col = case_map.get(pool_type, (STANDARD_CASE, "texts"))
+
+        if col == "url":
+            value = normalize_image_url(value)
+            if is_imgur_page_url(value):
+                await interaction.response.send_message(
+                    "Please provide the direct image link (`i.imgur.com`).", ephemeral=True
+                )
+                return
+            if not is_valid_image_url(value) or len(value) > MAX_URL_LENGTH:
+                await interaction.response.send_message("Invalid image URL.", ephemeral=True)
+                return
+            added = await database.add_rp_entry(
+                interaction.user.id, interaction.guild_id, rp_type, case_type=case_type, url=value
+            )
+            if not added:
+                await interaction.response.send_message("That value already exists for this RP type.", ephemeral=True)
+                return
+            await interaction.response.send_message(f"Added image to `{rp_type}`.", ephemeral=True)
+            return
+
+        if len(value) > MAX_TEXT_LENGTH:
+            await interaction.response.send_message(f"Text exceeds {MAX_TEXT_LENGTH} characters.", ephemeral=True)
+            return
+
+        if col == "action_texts":
+            missing = [
+                tag
+                for tag in self._required_action_tags(case_type)
+                if tag not in value and tag.replace("}", "_name}") not in value
+            ]
+            if missing:
+                warning = (
+                    f"Warning: your action text is missing dynamic tags: {', '.join(f'`{tag}`' for tag in missing)}.\n\n"
+                    "Do you want to add it anyway?"
+                )
+                view = ActionTextConfirmView(
+                    interaction.user.id,
+                    interaction.guild_id,
+                    rp_type,
+                    value,
+                    case_type=case_type,
+                )
+                await interaction.response.send_message(warning, view=view, ephemeral=True)
+                view.message = await interaction.original_response()
+                return
+            added = await database.add_rp_entry(
+                interaction.user.id, interaction.guild_id, rp_type, case_type=case_type, action_text=value
+            )
+            if not added:
+                await interaction.response.send_message("That value already exists for this RP type.", ephemeral=True)
+                return
+            await interaction.response.send_message(f"Added {self._case_display_name(case_type)} action text to `{rp_type}`.", ephemeral=True)
+            return
+
+        added = await database.add_rp_entry(
+            interaction.user.id, interaction.guild_id, rp_type, case_type=case_type, text=value
         )
-        await interaction.response.send_message(
-            f"Removed RP type `{rp_type}` and all of its saved entries.", ephemeral=True
-        )
+        if not added:
+            await interaction.response.send_message("That value already exists for this RP type.", ephemeral=True)
+            return
+        await interaction.response.send_message(f"Added {self._case_display_name(case_type)} text to `{rp_type}`.", ephemeral=True)
 
     @app_commands.command(
-        name="listtype", description="List all RP types configured for this server."
+        name="manage_rp",
+        description="Manage RP types and entries (list, edit, delete).",
     )
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_messages=True)
     @moderator_only()
-    async def list_type(self, interaction: discord.Interaction) -> None:
+    async def manage_rp(self, interaction: discord.Interaction) -> None:
         rp_types = await database.fetch_column(
             "SELECT type FROM rp_types WHERE guild_id = ? ORDER BY type COLLATE NOCASE",
             (interaction.guild_id,),
         )
-        await send_chunked_response(
-            interaction,
-            build_list_messages("RP types in this server:", rp_types),
-            ephemeral=True,
-        )
-
-    # ------------------------------------------------------------------ #
-    #  Image management                                                  #
-    # ------------------------------------------------------------------ #
-
-    @app_commands.command(
-        name="addimage", description="Save an image URL under an RP type."
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def add_image(
-        self, interaction: discord.Interaction, rp_type: str, url: str
-    ) -> None:
-        rp_type = normalize_rp_type(rp_type)
-        url = normalize_image_url(url)
-        if not await database.rp_type_exists(interaction.guild_id, rp_type):
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-            return
-        parsed = urlparse(url)
-        if parsed.netloc in {"imgur.com", "www.imgur.com"}:
+        if not rp_types:
             await interaction.response.send_message(
-                "Please provide the direct image link. It should start with `i.imgur.com`, not `imgur.com`.",
+                "No RP types configured in this server yet. Use `/add_rp` first.",
                 ephemeral=True,
             )
             return
-        if not is_valid_image_url(url):
-            await interaction.response.send_message(
-                "That doesn't look like a valid `http` or `https` URL.", ephemeral=True
-            )
-            return
-        if len(url) > MAX_URL_LENGTH:
-            await interaction.response.send_message(
-                "That URL is longer than I want to store safely.", ephemeral=True
-            )
-            return
-        duplicate = await database.fetch_one(
-            "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND url = ?",
-            (interaction.guild_id, rp_type, STANDARD_CASE, url),
-        )
-        if duplicate is not None:
-            await interaction.response.send_message(
-                "That image is already saved for this RP type.", ephemeral=True
-            )
-            return
-        await database.add_rp_entry(
-            interaction.user.id,
-            interaction.guild_id,
-            rp_type,
-            case_type=STANDARD_CASE,
-            url=url,
-        )
-        await interaction.response.send_message(
-            f"Added image to `{rp_type}`.", ephemeral=True
-        )
 
-    @app_commands.command(
-        name="removeimage", description="Remove a saved image URL from an RP type."
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def remove_image(
-        self, interaction: discord.Interaction, rp_type: str, url: str
-    ) -> None:
-        rp_type = normalize_rp_type(rp_type)
-        url = normalize_image_url(url)
-        if not await database.rp_type_exists(interaction.guild_id, rp_type):
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-            return
-        existing = await database.fetch_one(
-            "SELECT 1 FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND url = ?",
-            (interaction.guild_id, rp_type, STANDARD_CASE, url),
-        )
-        if existing is None:
-            await interaction.response.send_message(
-                "That image URL isn't saved under this RP type.", ephemeral=True
-            )
-            return
-        await database.execute_query(
-            "DELETE FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND url = ?",
-            (interaction.guild_id, rp_type, STANDARD_CASE, url),
-        )
+        view = ManageRPView(interaction.user.id, interaction.guild_id, rp_types, self)
         await interaction.response.send_message(
-            f"Removed image from `{rp_type}`.", ephemeral=True
-        )
-
-    @app_commands.command(
-        name="listimage", description="List the saved image URLs for an RP type."
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def list_image(self, interaction: discord.Interaction, rp_type: str) -> None:
-        rp_type = normalize_rp_type(rp_type)
-        if not await database.rp_type_exists(interaction.guild_id, rp_type):
-            await interaction.response.send_message("Unknown RP type.", ephemeral=True)
-            return
-        images = await database.fetch_column(
-            "SELECT DISTINCT url FROM roleplay_entries WHERE guild_id = ? AND type = ? AND case_type = ? AND url IS NOT NULL ORDER BY url COLLATE NOCASE",
-            (interaction.guild_id, rp_type, STANDARD_CASE),
-        )
-        await send_chunked_response(
-            interaction,
-            build_list_messages(f"Saved images for `{rp_type}`:", images),
+            "Select an RP type to manage:",
+            view=view,
             ephemeral=True,
         )
-
-    # ------------------------------------------------------------------ #
-    #  Text management                                                   #
-    # ------------------------------------------------------------------ #
-
-    @app_commands.command(
-        name="addtext",
-        description="Save a standard embed text template under an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def add_text(
-        self, interaction: discord.Interaction, rp_type: str, text: str
-    ) -> None:
-        await self._add_text_entry(interaction, rp_type, text, case_type=STANDARD_CASE)
-
-    @app_commands.command(
-        name="removetext",
-        description="Remove a standard embed text template from an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def remove_text(
-        self, interaction: discord.Interaction, rp_type: str, text: str
-    ) -> None:
-        await self._remove_text_entry(
-            interaction, rp_type, text, case_type=STANDARD_CASE
-        )
-
-    @app_commands.command(
-        name="listtext",
-        description="List the standard embed text templates for an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def list_text(self, interaction: discord.Interaction, rp_type: str) -> None:
-        await self._list_text_entries(interaction, rp_type, case_type=STANDARD_CASE)
-
-    @app_commands.command(
-        name="addselftext",
-        description="Save a selfcase embed text template under an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def add_self_text(
-        self, interaction: discord.Interaction, rp_type: str, text: str
-    ) -> None:
-        await self._add_text_entry(interaction, rp_type, text, case_type=SELF_CASE)
-
-    @app_commands.command(
-        name="removeselftext",
-        description="Remove a selfcase embed text template from an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def remove_self_text(
-        self, interaction: discord.Interaction, rp_type: str, text: str
-    ) -> None:
-        await self._remove_text_entry(interaction, rp_type, text, case_type=SELF_CASE)
-
-    @app_commands.command(
-        name="listselftext",
-        description="List the selfcase embed text templates for an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def list_self_text(
-        self, interaction: discord.Interaction, rp_type: str
-    ) -> None:
-        await self._list_text_entries(interaction, rp_type, case_type=SELF_CASE)
-
-    @app_commands.command(
-        name="addnulltext",
-        description="Save a nullcase embed text template under an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def add_null_text(
-        self, interaction: discord.Interaction, rp_type: str, text: str
-    ) -> None:
-        await self._add_text_entry(interaction, rp_type, text, case_type=NULL_CASE)
-
-    @app_commands.command(
-        name="removenulltext",
-        description="Remove a nullcase embed text template from an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def remove_null_text(
-        self, interaction: discord.Interaction, rp_type: str, text: str
-    ) -> None:
-        await self._remove_text_entry(interaction, rp_type, text, case_type=NULL_CASE)
-
-    @app_commands.command(
-        name="listnulltext",
-        description="List the nullcase embed text templates for an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def list_null_text(
-        self, interaction: discord.Interaction, rp_type: str
-    ) -> None:
-        await self._list_text_entries(interaction, rp_type, case_type=NULL_CASE)
-
-    # ------------------------------------------------------------------ #
-    #  Action text management                                            #
-    # ------------------------------------------------------------------ #
-
-    @app_commands.command(
-        name="addactiontext",
-        description="Save a standard action text template under an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def add_action_text(
-        self, interaction: discord.Interaction, rp_type: str, action_text: str
-    ) -> None:
-        await self._add_action_text_entry(
-            interaction, rp_type, action_text, case_type=STANDARD_CASE
-        )
-
-    @app_commands.command(
-        name="removeactiontext",
-        description="Remove a standard action text template from an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def remove_action_text(
-        self, interaction: discord.Interaction, rp_type: str, action_text: str
-    ) -> None:
-        await self._remove_action_text_entry(
-            interaction, rp_type, action_text, case_type=STANDARD_CASE
-        )
-
-    @app_commands.command(
-        name="listactiontext",
-        description="List the standard action text templates for an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def list_action_text(
-        self, interaction: discord.Interaction, rp_type: str
-    ) -> None:
-        await self._list_action_text_entries(
-            interaction, rp_type, case_type=STANDARD_CASE
-        )
-
-    @app_commands.command(
-        name="addselfactiontext",
-        description="Save a selfcase action text template under an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def add_self_action_text(
-        self, interaction: discord.Interaction, rp_type: str, action_text: str
-    ) -> None:
-        await self._add_action_text_entry(
-            interaction, rp_type, action_text, case_type=SELF_CASE
-        )
-
-    @app_commands.command(
-        name="removeselfactiontext",
-        description="Remove a selfcase action text template from an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def remove_self_action_text(
-        self, interaction: discord.Interaction, rp_type: str, action_text: str
-    ) -> None:
-        await self._remove_action_text_entry(
-            interaction, rp_type, action_text, case_type=SELF_CASE
-        )
-
-    @app_commands.command(
-        name="listselfactiontext",
-        description="List the selfcase action text templates for an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def list_self_action_text(
-        self, interaction: discord.Interaction, rp_type: str
-    ) -> None:
-        await self._list_action_text_entries(interaction, rp_type, case_type=SELF_CASE)
-
-    @app_commands.command(
-        name="addnullactiontext",
-        description="Save a nullcase action text template under an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def add_null_action_text(
-        self, interaction: discord.Interaction, rp_type: str, action_text: str
-    ) -> None:
-        await self._add_action_text_entry(
-            interaction, rp_type, action_text, case_type=NULL_CASE
-        )
-
-    @app_commands.command(
-        name="removenullactiontext",
-        description="Remove a nullcase action text template from an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def remove_null_action_text(
-        self, interaction: discord.Interaction, rp_type: str, action_text: str
-    ) -> None:
-        await self._remove_action_text_entry(
-            interaction, rp_type, action_text, case_type=NULL_CASE
-        )
-
-    @app_commands.command(
-        name="listnullactiontext",
-        description="List the nullcase action text templates for an RP type.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_messages=True)
-    @moderator_only()
-    @app_commands.autocomplete(rp_type=rp_type_autocomplete)
-    async def list_null_action_text(
-        self, interaction: discord.Interaction, rp_type: str
-    ) -> None:
-        await self._list_action_text_entries(interaction, rp_type, case_type=NULL_CASE)
-
-    # ------------------------------------------------------------------ #
-    #  Error handler                                                     #
-    # ------------------------------------------------------------------ #
-
-    async def cog_app_command_error(
-        self, interaction: discord.Interaction, error: app_commands.AppCommandError
-    ) -> None:
-        original = getattr(error, "original", error)
-        if isinstance(error, app_commands.MissingPermissions):
-            message = "That one is for mods only."
-        elif isinstance(error, app_commands.NoPrivateMessage):
-            message = "That command only works inside a server."
-        elif isinstance(error, app_commands.CommandOnCooldown):
-            message = (
-                f"That command is cooling down. Try again in {error.retry_after:.1f}s."
-            )
-        else:
-            logging.error(
-                "Unhandled app command error",
-                exc_info=(type(original), original, original.__traceback__),
-            )
-            message = (
-                "Something went wrong while running that command. The error was logged."
-            )
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
-
+        view.message = await interaction.original_response()
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(RPCommands(bot))

@@ -1,0 +1,324 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+
+import database
+from cogs.moderation import channel_matches_honeypot
+
+class Behavior(commands.Cog):
+    """Behavioral tracking, inactivity system, and emoji leaderboards."""
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self._messages: dict[tuple[int, int], list[int]] = {}
+        self._emoji_msg: dict[tuple[int, int], int] = {}
+        self._emoji_react: dict[tuple[int, int], int] = {}
+        self._flush_lock = asyncio.Lock()
+        self.inactivity_sweep.start()
+        self.flush_loop.start()
+
+    async def cog_unload(self) -> None:
+        self.inactivity_sweep.cancel()
+        self.flush_loop.stop()
+        await self.flush()
+
+    async def flush(self) -> None:
+        async with self._flush_lock:
+            if not self._messages and not self._emoji_msg and not self._emoji_react:
+                return
+            m_snap = self._messages
+            em_snap = self._emoji_msg
+            er_snap = self._emoji_react
+            self._messages = {}
+            self._emoji_msg = {}
+            self._emoji_react = {}
+
+        member_rows = [
+            (guild_id, user_id, joined_at, count, last_active)
+            for (guild_id, user_id), [count, last_active, joined_at] in m_snap.items()
+        ]
+        emoji_msg_rows = [
+            (guild_id, emoji_id, n)
+            for (guild_id, emoji_id), n in em_snap.items()
+        ]
+        emoji_react_rows = [
+            (guild_id, emoji_id, n)
+            for (guild_id, emoji_id), n in er_snap.items()
+        ]
+
+        statements = []
+        if member_rows:
+            statements.append((
+                "INSERT INTO member_behavior (guild_id, user_id, joined_at, total_messages, last_active_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(guild_id, user_id) DO UPDATE SET total_messages = total_messages + excluded.total_messages, last_active_at = MAX(COALESCE(last_active_at, 0), excluded.last_active_at)",
+                member_rows
+            ))
+        if emoji_msg_rows:
+            statements.append((
+                "INSERT INTO guild_emojis (guild_id, emoji_id, message_uses) VALUES (?, ?, ?) ON CONFLICT(guild_id, emoji_id) DO UPDATE SET message_uses = message_uses + excluded.message_uses",
+                emoji_msg_rows
+            ))
+        if emoji_react_rows:
+            statements.append((
+                "INSERT INTO guild_emojis (guild_id, emoji_id, reaction_uses) VALUES (?, ?, ?) ON CONFLICT(guild_id, emoji_id) DO UPDATE SET reaction_uses = reaction_uses + excluded.reaction_uses",
+                emoji_react_rows
+            ))
+
+        try:
+            await database.execute_batch(statements)
+        except Exception:
+            logging.exception("Failed to flush behavior batch")
+            async with self._flush_lock:
+                for k, v in m_snap.items():
+                    if k in self._messages:
+                        lc, ll, lj = self._messages[k]
+                        self._messages[k] = [lc + v[0], max(ll, v[1]), min(lj, v[2])]
+                    else:
+                        self._messages[k] = list(v)
+                for k, n in em_snap.items():
+                    self._emoji_msg[k] = self._emoji_msg.get(k, 0) + n
+                for k, n in er_snap.items():
+                    self._emoji_react[k] = self._emoji_react.get(k, 0) + n
+
+    # default_permissions is a UI hint, not a security boundary
+    @app_commands.command(name="enableunverification", description="Turns on the automatic unverification sweep.")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
+    async def enableunverification(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id
+
+        row = await database.fetch_one(
+            "SELECT verified_role_id FROM guild_configs WHERE guild_id = ?",
+            (guild_id,)
+        )
+        if not row or not row[0]:
+            await interaction.response.send_message("Please configure a verified role first using `/crouton setup`.", ephemeral=True)
+            return
+
+        await database.execute_query(
+            """
+            INSERT INTO guild_configs (guild_id, inactivity_system_enabled) VALUES (?, 1)
+            ON CONFLICT(guild_id) DO UPDATE SET inactivity_system_enabled = 1
+            """,
+            (guild_id,)
+        )
+        database.invalidate_guild_config(guild_id)
+        await interaction.response.send_message("Unverification setting saved, but the automatic sweep is not active yet, so no members will be unverified automatically.", ephemeral=True)
+
+    # default_permissions is a UI hint, not a security boundary
+    @app_commands.command(name="disableunverification", description="Turns off the automatic unverification sweep.")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
+    async def disableunverification(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id
+
+        await database.execute_query(
+            """
+            INSERT INTO guild_configs (guild_id, inactivity_system_enabled) VALUES (?, 0)
+            ON CONFLICT(guild_id) DO UPDATE SET inactivity_system_enabled = 0
+            """,
+            (guild_id,)
+        )
+        database.invalidate_guild_config(guild_id)
+        await interaction.response.send_message("Automatic unverification system disabled.", ephemeral=True)
+
+    # default_permissions is a UI hint, not a security boundary
+    @app_commands.command(name="manualresetinactivity", description="Resets a member's inactivity timer.")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
+    async def manualresetinactivity(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        guild_id = interaction.guild_id
+
+        now = int(discord.utils.utcnow().timestamp())
+        joined = int(member.joined_at.timestamp()) if member.joined_at else now
+        await database.execute_query(
+            """
+            INSERT INTO member_behavior (guild_id, user_id, joined_at, inactivity_reset_at, last_active_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                inactivity_reset_at = excluded.inactivity_reset_at,
+                last_active_at = excluded.last_active_at,
+                inactivity_status = NULL
+            """,
+            (guild_id, member.id, joined, now, now)
+        )
+        await interaction.response.send_message(f"Inactivity timer reset for {member.mention}.", ephemeral=True)
+
+    @app_commands.command(name="emojirank", description="Custom emoji message usage leaderboard.")
+    @app_commands.choices(sort_direction=[
+        app_commands.Choice(name="Top (Most used)", value="top"),
+        app_commands.Choice(name="Bottom (Least used)", value="bottom"),
+    ])
+    async def emojirank(self, interaction: discord.Interaction, sort_direction: str = "top") -> None:
+        if interaction.guild is None or interaction.guild_id is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+        guild_id = interaction.guild_id
+
+        order = "DESC" if sort_direction == "top" else "ASC"
+        async with self.bot.db_pool.acquire() as conn:
+            cursor = await conn.execute(
+                f"SELECT emoji_id, message_uses FROM guild_emojis WHERE guild_id = ? ORDER BY message_uses {order} LIMIT 10",
+                (guild_id,)
+            )
+            data = await cursor.fetchall()
+
+        if not data:
+            await interaction.response.send_message("No custom emoji usage tracked yet.", ephemeral=True)
+            return
+
+        lines = []
+        for rank, (emoji_id, uses) in enumerate(data, 1):
+            emoji = interaction.guild.get_emoji(emoji_id)
+            emoji_str = str(emoji) if emoji else f"<:unknown:{emoji_id}>"
+            lines.append(f"`#{rank}` {emoji_str} — **{uses}** uses")
+
+        embed = discord.Embed(
+            title=f"Custom Emoji Message Usage ({sort_direction.capitalize()})",
+            color=0x3498db,
+            description="\n".join(lines)
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="reactionrank", description="Custom emoji reaction usage leaderboard.")
+    @app_commands.choices(sort_direction=[
+        app_commands.Choice(name="Top (Most used)", value="top"),
+        app_commands.Choice(name="Bottom (Least used)", value="bottom"),
+    ])
+    async def reactionrank(self, interaction: discord.Interaction, sort_direction: str = "top") -> None:
+        if interaction.guild is None or interaction.guild_id is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+        guild_id = interaction.guild_id
+
+        order = "DESC" if sort_direction == "top" else "ASC"
+        async with self.bot.db_pool.acquire() as conn:
+            cursor = await conn.execute(
+                f"SELECT emoji_id, reaction_uses FROM guild_emojis WHERE guild_id = ? ORDER BY reaction_uses {order} LIMIT 10",
+                (guild_id,)
+            )
+            data = await cursor.fetchall()
+
+        if not data:
+            await interaction.response.send_message("No custom emoji reaction usage tracked yet.", ephemeral=True)
+            return
+
+        lines = []
+        for rank, (emoji_id, uses) in enumerate(data, 1):
+            emoji = interaction.guild.get_emoji(emoji_id)
+            emoji_str = str(emoji) if emoji else f"<:unknown:{emoji_id}>"
+            lines.append(f"`#{rank}` {emoji_str} — **{uses}** reactions")
+
+        embed = discord.Embed(
+            title=f"Custom Emoji Reaction Usage ({sort_direction.capitalize()})",
+            color=0x3498db,
+            description="\n".join(lines)
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if not message.guild or message.author.bot:
+            return
+
+        guild_id = message.guild.id
+        config = await database.get_guild_config(guild_id)
+        if config and config.honeypot_channel_id and channel_matches_honeypot(message.channel, config.honeypot_channel_id):
+            return
+
+        user_id = message.author.id
+        now = int(discord.utils.utcnow().timestamp())
+        joined = int(message.author.joined_at.timestamp()) if getattr(message.author, "joined_at", None) else now
+
+        async with self._flush_lock:
+            if (guild_id, user_id) in self._messages:
+                entry = self._messages[(guild_id, user_id)]
+                entry[0] += 1
+                entry[1] = max(entry[1], now)
+            else:
+                self._messages[(guild_id, user_id)] = [1, now, joined]
+
+            custom_emojis = re.findall(r"<a?:[a-zA-Z0-9\_]+:([0-9]+)>", message.content)
+            for emoji_id_str in custom_emojis:
+                emoji_id = int(emoji_id_str)
+                self._emoji_msg[(guild_id, emoji_id)] = self._emoji_msg.get((guild_id, emoji_id), 0) + 1
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        if not payload.guild_id or not payload.emoji.id:
+            return
+
+        guild_id = payload.guild_id
+        emoji_id = payload.emoji.id
+        async with self._flush_lock:
+            self._emoji_react[(guild_id, emoji_id)] = self._emoji_react.get((guild_id, emoji_id), 0) + 1
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member) -> None:
+        if getattr(member, "bot", False):
+            return
+        guild_id = member.guild.id
+        user_id = member.id
+        try:
+            async with self._flush_lock:
+                self._messages.pop((guild_id, user_id), None)
+            await database.execute_query(
+                "DELETE FROM member_behavior WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            )
+        except Exception:
+            logging.exception("Failed to handle member remove behavior cleanup")
+        # Note: a flush that is already in-flight (snapshot taken before removal) can re-insert rows for a removed guild/member once; this limitation is documented and ignored.
+
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        guild_id = guild.id
+        try:
+            async with self._flush_lock:
+                for k in [k for k in self._messages if k[0] == guild_id]:
+                    self._messages.pop(k, None)
+                for k in [k for k in self._emoji_msg if k[0] == guild_id]:
+                    self._emoji_msg.pop(k, None)
+                for k in [k for k in self._emoji_react if k[0] == guild_id]:
+                    self._emoji_react.pop(k, None)
+
+            statements = [
+                ("DELETE FROM guild_configs WHERE guild_id = ?", [(guild_id,)]),
+                ("DELETE FROM scan_channels WHERE guild_id = ?", [(guild_id,)]),
+                ("DELETE FROM member_behavior WHERE guild_id = ?", [(guild_id,)]),
+                ("DELETE FROM guild_emojis WHERE guild_id = ?", [(guild_id,)]),
+                ("DELETE FROM rp_types WHERE guild_id = ?", [(guild_id,)]),
+            ]
+            await database.execute_batch(statements)
+        except Exception:
+            logging.exception("Failed to handle guild remove cleanup")
+        finally:
+            database.invalidate_guild_config(guild_id)
+        # Note: a flush that is already in-flight (snapshot taken before removal) can re-insert rows for a removed guild/member once; this limitation is documented and ignored.
+
+    @tasks.loop(hours=6)
+    async def inactivity_sweep(self) -> None:
+        # Periodic check for inactive verified members when enabled
+        pass
+
+    @inactivity_sweep.before_loop
+    async def before_inactivity_sweep(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=15)
+    async def flush_loop(self) -> None:
+        try:
+            await self.flush()
+        except Exception:
+            logging.exception("Error in behavior flush_loop")
+
+    @flush_loop.before_loop
+    async def before_flush_loop(self) -> None:
+        await self.bot.wait_until_ready()
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(Behavior(bot))

@@ -13,6 +13,11 @@ import discord
 from discord import app_commands
 
 
+def has_manage_messages(interaction: discord.Interaction) -> bool:
+    perms = interaction.permissions
+    return bool(perms.manage_messages or perms.administrator)
+
+
 def moderator_only() -> app_commands.Check:
     """Restrict management commands to members with the Manage Messages permission."""
 
@@ -20,10 +25,7 @@ def moderator_only() -> app_commands.Check:
         if interaction.guild is None:
             raise app_commands.NoPrivateMessage()
 
-        # guild_permissions is only available on Member, not User (e.g. in DMs).
-        # getattr with a default lets us handle both without an isinstance check.
-        permissions = getattr(interaction.user, "guild_permissions", None)
-        if permissions and permissions.manage_messages:
+        if has_manage_messages(interaction):
             return True
 
         raise app_commands.MissingPermissions(["manage_messages"])

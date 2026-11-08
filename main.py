@@ -68,15 +68,15 @@ async def sync(ctx: commands.Context, scope: str = "local") -> None:
 
     if scope == "global":
         synced = await bot.tree.sync()
-        await ctx.reply(f"Global sync finished. {len(synced)} commands updated.")
+        await ctx.send(f"Global sync finished. {len(synced)} commands updated.")
         return
 
     if ctx.guild is None:
-        await ctx.reply("Local sync only works inside a server.")
+        await ctx.send("Local sync only works inside a server.")
         return
 
     synced = await bot.tree.sync(guild=ctx.guild)
-    await ctx.reply(
+    await ctx.send(
         f"Local sync finished for this server. {len(synced)} commands updated."
     )
 
@@ -84,14 +84,14 @@ async def sync(ctx: commands.Context, scope: str = "local") -> None:
 @sync.error
 async def sync_error(ctx: commands.Context, error: commands.CommandError) -> None:
     if isinstance(error, commands.NotOwner):
-        await ctx.reply("That command is owner-only.")
+        await ctx.send("That command is owner-only.")
         return
 
     logging.error(
         "Unhandled sync command error",
         exc_info=(type(error), error, error.__traceback__),
     )
-    await ctx.reply("Sync failed. Check the logs for details.")
+    await ctx.send("Sync failed. Check the logs for details.")
 
 
 def main() -> None:

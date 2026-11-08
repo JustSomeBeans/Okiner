@@ -1,8 +1,8 @@
 # Okiner
 
-Okiner is a Python based Discord bot for server member interaction, community engagement, and roleplay-focused features.
+Okiner is a Python-based Discord bot for server member interaction, community engagement, roleplay, security, and moderation features.
 
-Current features include configurable roleplay command pools, case-specific roleplay text, image rotation, member autocomplete, temporary RP back buttons, marriage proposals, divorce, adoption requests, and disowning adopted children. Persistent data is stored in a local SQLite database.
+Current features include configurable roleplay command pools, case-specific roleplay text, image rotation, member autocomplete, temporary RP back buttons, marriage proposals, divorce, adoption requests, disowning adopted children, native account alt detection (`/scan`), server configuration, honeypot protection, inactivity tracking, and custom emoji/reaction leaderboards. Persistent data is stored in a local SQLite database (`rp.db`).
 
 ## Privacy
 
@@ -72,7 +72,7 @@ Add your bot token and application ID to `.env`.
 
 ## Data Storage
 
-Okiner creates and uses `rp.db` in the project directory. On startup, it creates missing tables and applies lightweight migrations for older roleplay, adoption, and marriage table layouts.
+Okiner creates and uses `rp.db` in the project directory. On startup, it creates missing tables and applies lightweight migrations for older roleplay, adoption, marriage, guild configuration, scan channels, member behavior, and emoji tables.
 
 The database stores:
 
@@ -81,6 +81,10 @@ The database stores:
 - Discord user IDs associated with saved RP entries.
 - Marriage records.
 - Adoption records.
+- Per-guild configuration (log channels, honeypot channels, verified roles, moderator roles, inactivity system toggles).
+- Allowlisted channels for `/scan`.
+- Member behavior telemetry (message counts, last active timestamps, inactivity status).
+- Guild custom emoji usage stats.
 
 ## Run
 
@@ -100,146 +104,36 @@ After the bot starts, run `oki!sync` (owner only) in a server to register slash 
 
 ## Commands
 
-All slash commands only work inside servers. RP management commands require **Manage Messages** permission and are intended for moderators. Family commands are available to server members.
+All slash commands only work inside servers. Management and security commands require appropriate permissions (Manage Messages or Administrator).
 
-Most RP commands support autocomplete for RP type names. Commands that target another user also support member autocomplete and a special `everyone` target option.
-
-### Roleplay
+### Roleplay & Family
 
 | Command | Description |
 |---|---|
-| `/rp <type> [target]` | Perform an RP interaction using the saved pools for that RP type. If a target is provided, Okiner uses the matching standard or selfcase content. If no target is provided, Okiner uses nullcase content. The bot picks a random action text, embed text, and standard-case image from what is saved. |
+| `/rp <type> [target]` | Perform an RP interaction using saved pools. |
+| `/add_rp <type> [image_url] [image_file]` | Create a new RP type with dual image input (URL or file upload) and 4 case modes. |
+| `/edit_rp <type>` | Append additional entries or image URLs to an existing RP type. |
+| `/manage_rp` | Interactive management, browsing, and deletion of RP types and entries. |
+| Family commands | Marriage, divorce, adoption, disown, family tree generation. |
 
-`/rp` behavior notes:
+### Moderation & Security (Crouton Suite)
 
-- The target is optional. Leaving it blank uses the nullcase flow.
-- Targeting yourself uses the selfcase flow when selfcase entries exist. If a selfcase pool is missing, text and action text fall back to the standard pool.
-- Images are always drawn from the standard image pool, even for selfcase and nullcase text/action variants.
-- Using `everyone` keeps the interaction non-pinging and uses the standard case.
-- Standard targeted RP messages include a temporary back button for 5 minutes.
-- The back button is only usable once.
-- If the original target was a specific member, only that member can press it.
-- If the original target was `everyone`, any server member can press it.
-- The back button never appears for selfcase or nullcase responses.
+| Command | Permission | Description |
+|---|---|---|
+| `/crouton setup` | Administrator | Configure log channel, verified role, and moderator role. |
+| `/crouton help` | Everyone | Display command reference and help guide. |
+| `/crouton uptime` | Everyone | Report bot process uptime. |
+| `/scan <user>` | Manage Messages | Run native Python alt/trust analysis and post scan card. |
+| `/sethoneypot <channel>` | Administrator | Set or clear the server honeypot channel. |
+| `/addscanchannel <channel>` | Manage Messages | Allowlist a channel for `/scan`. |
+| `/removescanchannel <channel>` | Manage Messages | Remove a channel from the `/scan` allowlist. |
+| `/enableunverification` | Manage Messages | Enable automatic unverification sweep. |
+| `/disableunverification` | Manage Messages | Disable automatic unverification sweep. |
+| `/manualresetinactivity <user>` | Manage Messages | Reset a member's inactivity timer. |
 
-### Type Management *(mod only)*
-
-| Command | Description |
-|---|---|
-| `/addtype <type>` | Register a new RP type for this server. Names are normalized to lowercase, must use only letters, numbers, hyphens, or underscores, and must stay within 64 characters. |
-| `/removetype <type>` | Delete an RP type and everything saved under it, including standard, selfcase, and nullcase entries. |
-| `/listtype` | Show all RP types registered in this server. |
-
-### Image Management *(mod only)*
-
-Images are type-level flavor and currently belong to the standard pool only.
+### Leaderboards
 
 | Command | Description |
 |---|---|
-| `/addimage <type> <url>` | Save an image URL under an RP type. Must be a valid `http` or `https` URL and stay within the bot's URL length limit. Imgur gallery links (`imgur.com`) are rejected; use a direct image link such as `i.imgur.com`. |
-| `/removeimage <type> <url>` | Remove a saved image URL from an RP type. |
-| `/listimage <type>` | List all saved image URLs for an RP type. |
-
-### Standard Text Management *(mod only)*
-
-Standard text entries are the default embed text pool for targeted RP. They support `{user}`, `{target}`, `{user_name}`, and `{target_name}` placeholders.
-
-| Command | Description |
-|---|---|
-| `/addtext <type> <text>` | Save a standard embed text template under an RP type. Max 1500 characters. |
-| `/removetext <type> <text>` | Remove a standard embed text template from an RP type. |
-| `/listtext <type>` | List the standard embed text templates for an RP type. |
-
-### Selfcase Text Management *(mod only)*
-
-Selfcase text entries are used when a user targets themself with `/rp`.
-
-| Command | Description |
-|---|---|
-| `/addselftext <type> <text>` | Save a selfcase embed text template under an RP type. Max 1500 characters. |
-| `/removeselftext <type> <text>` | Remove a selfcase embed text template from an RP type. |
-| `/listselftext <type>` | List the selfcase embed text templates for an RP type. |
-
-### Nullcase Text Management *(mod only)*
-
-Nullcase text entries are used when `/rp` is run without a target.
-
-| Command | Description |
-|---|---|
-| `/addnulltext <type> <text>` | Save a nullcase embed text template under an RP type. Max 1500 characters. |
-| `/removenulltext <type> <text>` | Remove a nullcase embed text template from an RP type. |
-| `/listnulltext <type>` | List the nullcase embed text templates for an RP type. |
-
-### Standard Action Text Management *(mod only)*
-
-Action texts appear as the bolded header line in the RP embed, for example *"Jane hugs Bob"*. They support the same placeholders as regular texts.
-
-| Command | Description |
-|---|---|
-| `/addactiontext <type> <action_text>` | Save a standard action text template. You'll get a warning if expected placeholders are missing, but you can still save it. Max 1500 characters. |
-| `/removeactiontext <type> <action_text>` | Remove a standard action text template. |
-| `/listactiontext <type>` | List the standard action text templates for an RP type. |
-
-### Selfcase Action Text Management *(mod only)*
-
-| Command | Description |
-|---|---|
-| `/addselfactiontext <type> <action_text>` | Save a selfcase action text template. Max 1500 characters. |
-| `/removeselfactiontext <type> <action_text>` | Remove a selfcase action text template from an RP type. |
-| `/listselfactiontext <type>` | List the selfcase action text templates for an RP type. |
-
-### Nullcase Action Text Management *(mod only)*
-
-| Command | Description |
-|---|---|
-| `/addnullactiontext <type> <action_text>` | Save a nullcase action text template. Max 1500 characters. |
-| `/removenullactiontext <type> <action_text>` | Remove a nullcase action text template from an RP type. |
-| `/listnullactiontext <type>` | List the nullcase action text templates for an RP type. |
-
-### Case Notes
-
-Selfcase behavior handles what happens when a user targets themself with an RP command. RP types do not need dedicated selfcase entries and will still work without them because text and action text fall back to the standard pool.
-
-Nullcase behavior handles what happens when `/rp` is used without any target. Unlike selfcase, nullcase requires its own saved text and/or action text entries for the RP type to work without a target.
-
-### Placeholders
-
-These tags are replaced dynamically when `/rp` is used:
-
-| Tag | Replaced with |
-|---|---|
-| `{user}` | Mention of the person who ran `/rp` |
-| `{target}` | Mention of the target member |
-| `{user_name}` | Display name of the person who ran `/rp` |
-| `{target_name}` | Display name of the target member |
-
-Notes:
-
-- Missing expected action-text placeholders trigger a confirmation step instead of a hard rejection.
-- Nullcase action texts are most useful with `{user}` and/or `{user_name}`, because there is no target in that flow.
-
-### Family
-
-Family commands create opt-in relationship records between server members.
-
-| Command | Description |
-|---|---|
-| `/marry <user>` | Propose marriage to another non-bot user. The target user must accept the confirmation prompt before the marriage is saved. A user can only be in one marriage at a time. |
-| `/divorce <user>` | Remove an existing marriage between you and the selected user. |
-| `/adopt <user>` | Ask another non-bot user to become your child. The target user must accept the confirmation prompt before the adoption is saved. A user can only have one parent. |
-| `/disown <user>` | Remove an existing parent-child relationship where the selected user is your child. |
-
-Family behavior notes:
-
-- You cannot marry, divorce, adopt, or disown yourself.
-- Marriage and adoption requests use Discord buttons and time out if the target user does not respond.
-- Marriage records store the two user IDs and a timestamp.
-- Adoption records store the parent user ID, child user ID, and a timestamp.
-
-## Owner Commands
-
-| Command | Description |
-|---|---|
-| `oki!sync` | Sync slash commands to the current server. This is the default local sync mode and only works inside a server. |
-| `oki!sync local` | Explicitly sync slash commands to the current server. |
-| `oki!sync global` | Sync slash commands globally (takes up to an hour to propagate). |
+| `/emojirank <top/bottom>` | Paginated custom emoji message usage leaderboard. |
+| `/reactionrank <top/bottom>` | Paginated custom emoji reaction usage leaderboard. |

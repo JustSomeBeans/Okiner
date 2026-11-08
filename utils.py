@@ -15,6 +15,7 @@ from __future__ import annotations
 # =============================================================================
 
 from dataclasses import dataclass
+import re
 from urllib.parse import urlparse
 
 import discord
@@ -48,17 +49,29 @@ def is_valid_image_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def is_imgur_page_url(url: str) -> bool:
+    """Check if URL points to an Imgur page rather than a direct image asset."""
+    return (urlparse(url).hostname or "").lower() in {"imgur.com", "www.imgur.com"}
+
+
 def apply_placeholders(
     template: str,
     actor: discord.abc.User,
     target: PlaceholderTarget,
 ) -> str:
     """Fill supported placeholders inside RP text."""
-    return (
-        template.replace("{user}", actor.mention)
-        .replace("{target}", target.mention)
-        .replace("{user_name}", actor.display_name)
-        .replace("{target_name}", target.display_name)
+    def safe(n: str) -> str:
+        return discord.utils.escape_markdown(discord.utils.escape_mentions(n))
+    values = {
+        "user": actor.mention,
+        "target": target.mention,
+        "user_name": safe(actor.display_name),
+        "target_name": safe(target.display_name),
+    }
+    return re.sub(
+        r"\{(user_name|target_name|user|target)\}",
+        lambda m: values[m.group(1)],
+        template,
     )
 
 

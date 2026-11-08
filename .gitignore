@@ -11,8 +11,15 @@ __pycache__/
 
 # Database files
 *.db
-*.sqlite3-query
+*.db-journal
 *.db-shm
 *.db-wal
+*.sqlite3
+rp.db.bak-*
+*.log
+.idea/
+.vscode/
+venv/
+.pytest_cache/
 
 test.py
