@@ -401,7 +401,7 @@ class FamilyCommands(commands.Cog):
             return
 
         if user.bot:
-            await interaction.response.send_message("We marrying clankers now? :wilted_rose: :sob: :v:")
+            await interaction.response.send_message("You can't marry a toaster")
             return
 
         key = ("marry", interaction.user.id, user.id)
@@ -482,7 +482,7 @@ class FamilyCommands(commands.Cog):
             return
 
         if user.bot:
-            await interaction.response.send_message("We adopting clankers now? :wilted_rose: :sob: :v:")
+            await interaction.response.send_message("You can't adopt toasters")
             return
         
         key = ("adopt", interaction.user.id, user.id)
@@ -529,7 +529,7 @@ class FamilyCommands(commands.Cog):
             return
 
         if user.bot:
-            await interaction.response.send_message("Ain't no clanker is your child... :broken_heart: :sob: :v: :wilted_rose:")
+            await interaction.response.send_message("You can't have a bot as your kid silly")
             return
         
         disowner_id = interaction.user.id
