@@ -1,131 +1,124 @@
 # Okiner Bot Documentation & Administrator Guide
 
-Last updated: October 17, 2026
+Last updated: November 7, 2026
 
 ## 1. System Overview
 
-**Okiner** is a sophisticated, modular Discord bot engineered in Python using `discord.py` and asynchronous SQLite (`asqlite`) persistence. Designed for high performance, multi-guild safety, and clean separation of concerns, Okiner provides four core operational suites:
-1. **Roleplay Suite**: Configurable interaction pools with multi-case support (Standard, Selfcase, Nullcase, and Standard + Self + Null), dynamic placeholder substitution, dual image input support (hosted URL or direct file attachment), and interactive management browsers.
-2. **Family & Relationship Suite**: Marriage proposals, divorces, adoption requests, disowns, and interactive family tree rendering.
-3. **Crouton Moderation & Security Suite**: Native Python trust and alt scoring (`/scan`), server configuration wizards (`/crouton setup`), secure honeypot trap channels with automatic ban enforcement, channel allowlisting, and inactivity sweeping.
-4. **Engagement & Telemetry Suite**: Message activity tracking, custom emoji message/reaction leaderboards, and interaction telemetry.
+Okiner is a modular Discord bot written in Python with `discord.py` and asynchronous SQLite (`asqlite`). It provides:
+
+1. **Roleplay**: configurable interaction pools with Standard, Selfcase, and Nullcase text, placeholders, image rotation (URL or upload), and interactive management.
+2. **Family**: marriage proposals, divorce, adoption, disowning, and a family tree image.
+3. **Crouton moderation and security**: native alt/trust scoring (`/scan`), server setup, a honeypot channel with automatic bans, and a scan-channel allowlist. The automatic unverification sweep is **planned and not implemented**.
+4. **Engagement**: message activity counters and custom emoji / reaction leaderboards.
 
 ---
 
-## 2. Prerequisites & Environment Setup
+## 2. Prerequisites & Setup
 
-### System Requirements
-- **Python**: Version 3.10 or higher.
-- **Database**: SQLite3 (bundled with Python standard library).
-- **Environment**: Linux (Debian/Ubuntu/CentOS) or Windows (PowerShell).
+- **Python** 3.11 or newer (developed on 3.13).
+- **discord.py** 2.6 or newer. `requirements.txt` pins exact versions.
+- **SQLite** (bundled with Python).
+- **Fonts** (Linux): `sudo apt install -y fonts-dejavu-core` so family trees render with a proper font.
 
-### Installation Instructions
+### Installation
 
-#### Debian / Linux Environments
+Debian / Linux:
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
+sudo apt install -y python3 python3-venv python3-pip git fonts-dejavu-core
 git clone <repository-url> OkinerExperimental
 cd OkinerExperimental
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
-#### Windows (PowerShell)
+Windows (PowerShell):
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
 pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-### Environment Configuration (`.env`)
-Populate your `.env` file with your Discord credentials:
+### Environment (`.env`)
 ```env
 DISCORD_TOKEN=your_bot_token_here
 DISCORD_APPLICATION_ID=your_application_id_here
 ```
 
-### Discord Developer Portal Configuration
-1. **Bot Intents**: Enable the following Privileged Gateway Intents:
-   - **Presence Intent**
-   - **Server Members Intent**
-   - **Message Content Intent**
-2. **OAuth2 Scopes**: `bot`, `applications.commands`
-3. **Bot Permissions**:
-   - Add Reactions, Attach Files, Change Nickname, Embed Links
-   - Send Messages, Send Messages in Threads
-   - Use External Emojis, Use External Stickers, Use Slash Commands
-   - View Audit Log, View Channels
+### Discord Developer Portal
+
+1. **Privileged intents**: enable **Server Members** and **Message Content**. Leave **Presence** off.
+2. **OAuth2 scopes**: `bot`, `applications.commands`.
+3. **Bot permissions**: Attach Files, Ban Members, Embed Links, Manage Messages, Read Message History, Send Messages, Send Messages in Threads, Use External Emojis, Use Application Commands, View Channels.
+
+Permission changes affect only new invites. Existing servers must grant newly added permissions (Ban Members, Read Message History) by hand. The startup log prints an invite URL with the current permission set.
 
 ---
 
-## 3. Running & Command Synchronization
+## 3. Running & Command Sync
 
-### Startup
-Launch the bot from the project root:
-- **Linux**: `python3 main.py`
-- **Windows**: `python main.py`
+```bash
+python3 main.py
+```
 
-### Slash Command Registration (`oki!sync`)
-Okiner uses owner-restricted prefix commands for deploying slash commands:
-- `oki!sync` — Syncs application commands immediately to the current server (recommended for testing and rapid development).
-- `oki!sync global` — Registers commands globally across all Discord servers where the bot is installed (note: global propagation can take up to 1 hour per Discord API limits).
+On startup Okiner applies database migrations (with an automatic backup first), then loads its cogs. Owner-only prefix commands register slash commands:
 
----
+- `oki!sync`: sync to the current server (fast, for testing).
+- `oki!sync global`: sync everywhere (up to an hour to propagate).
 
-## 4. Complete Slash Command Reference
-
-### Roleplay & Family Commands (`cogs/rp_commands.py`, `cogs/family_commands.py`)
-
-| Command | Permission | Description |
-|---|---|---|
-| `/rp <type> [target]` | Everyone | Execute a roleplay interaction. Automatically resolves target metadata, selects appropriate case pool (standard, selfcase, or nullcase), applies placeholder substitutions, and attaches temporary back buttons. |
-| `/add_rp <type> [image_url] [image_file]` | Manage Messages (Moderator) | Launch a guided flow to create a new roleplay type. Enforces strict XOR validation for dual image inputs (either a hosted URL or direct file upload), followed by an interactive mode selection view (`Standard Only`, `Standard + Selfcase`, `Standard + Nullcase`, `Standard + Self + Null`) and a submission modal. |
-| `/edit_rp <type>` | Manage Messages (Moderator) | Open an interactive options menu to append additional image URLs, embed text templates, or action headers to an existing roleplay type. |
-| `/manage_rp` | Manage Messages (Moderator) | Open a multi-step interactive paginated browser to browse, navigate, edit in place, or delete specific entries across all case pools, or remove an entire roleplay type. |
-| `/marry <user>` | Everyone | Propose marriage to another server member. Sends an interactive confirmation prompt. |
-| `/divorce <user>` | Everyone | Terminate an existing marriage relationship. |
-| `/adopt <user>` | Everyone | Request adoption of another server member with confirmation handling. |
-| `/disown <user>` | Everyone | Disown an adopted child or parent relationship. |
-| `/familytree [user]` | Everyone | Render and display a member's complete family tree (spouse, parents, children). |
-
-### Crouton Moderation & Security Suite (`cogs/moderation.py`)
-
-| Command | Permission | Description |
-|---|---|---|
-| `/crouton setup` | Administrator | Run the interactive setup wizard to configure server log channels, verified member roles, and moderator roles. |
-| `/crouton help` | Everyone | Display the comprehensive Crouton command reference and help guide. |
-| `/crouton uptime` | Everyone | Report current bot process uptime and operational status. |
-| `/scan <user>` | Manage Messages | Perform automated trust analysis (checking account creation age, default avatars, invite tracking) and post an interactive scan card embed. |
-| `/sethoneypot <channel>` | Administrator | Designate or clear a honeypot trap channel. Any non-staff message posted here triggers an immediate automatic ban and audit log entry. |
-| `/addscanchannel <channel>` | Manage Messages | Allowlist a specific channel for `/scan` execution. |
-| `/removescanchannel <channel>` | Manage Messages | Revoke channel allowlist status for `/scan`. |
-| `/enableunverification` | Manage Messages | Enable automatic inactivity tracking sweeps and unverification flows. |
-| `/disableunverification` | Manage Messages | Disable automatic inactivity sweeps. |
-| `/manualresetinactivity <user>` | Manage Messages | Manually reset a specific member's inactivity timer. |
-
-### Engagement & Leaderboard Commands (`cogs/behavior.py`)
-
-| Command | Permission | Description |
-|---|---|---|
-| `/emojirank <top/bottom>` | Everyone | View a paginated leaderboard of custom emoji usage counts across server messages. |
-| `/reactionrank <top/bottom>` | Everyone | View a paginated leaderboard of custom emoji usage counts across message reactions. |
+The bot needs permission to send messages and read history in the channel where you run them.
 
 ---
 
-## 5. Administrator Workflows & Security Best Practices
+## 4. Slash Command Reference
 
-1. **Server Hardening**:
-   - Run `/crouton setup` immediately upon adding the bot to configure security logging and staff roles.
-   - Deploy honeypot trap channels using `/sethoneypot` in hidden or restricted-looking staff areas to catch automated user token bots.
-2. **Managing Roleplay Content**:
-   - Utilize `/add_rp` with direct file attachments (`image_file`) for reliable permanent storage or hosted URLs (`image_url`).
-   - Use `/manage_rp` for fine-grained moderation and content curation.
-3. **Privacy Compliance**:
-   - Okiner stores only explicitly submitted command inputs, family records, configuration settings, and activity telemetry in `rp.db`.
-   - Regular chat message contents are never logged or stored. Consult [PRIVACY.md](PRIVACY.md) for full US/EU child privacy compliance disclosures.
+All commands work only in servers.
+
+### Roleplay and Family
+
+| Command | Permission | Description |
+|---|---|---|
+| `/rp <type> [target]` | Everyone | Run an RP interaction. Picks the standard, selfcase, or nullcase pool, fills placeholders, and may attach an "RP back" button for the target. |
+| `/add_rp <type> [image_url] [image_file]` | Manage Messages | Guided creation of a type. Exactly one of image URL or upload is required. Uploaded images use Discord CDN links that can expire, so a hosted URL is more durable. |
+| `/edit_rp <type>` | Manage Messages | Add an image, text, or action text to an existing type. Duplicates are rejected. |
+| `/manage_rp` | Manage Messages | Browse, edit, and delete entries or whole types. With more than 25 types the type list is paged. Image entries are shown as previews. |
+| `/marry <user>` | Everyone | Propose marriage. 30 second cooldown; one pending proposal per pair. |
+| `/adopt <user>` | Everyone | Ask to adopt a member. Same limits. |
+| `/divorce <user>` | Everyone | End your marriage with that user. |
+| `/disown <user>` | Everyone | End a parent-child record where you are the parent. |
+| `/familytree [user]` | Everyone | Family tree image. Only people in this server appear, and at most the 40 closest relatives. |
+
+Relationships are global: a marriage or adoption is not limited to one server.
+
+### Crouton
+
+| Command | Permission | Description |
+|---|---|---|
+| `/crouton setup` | Administrator | Set log channel, verified role, moderator role. Omitted options keep their stored values. Rejected: @everyone as a role, a managed role as the verified role, a log channel the bot cannot post in, and a log channel equal to the honeypot channel. |
+| `/crouton help` / `uptime` | Everyone | Help text and uptime. |
+| `/scan <member>` | Manage Messages | Trust analysis card (account age, avatar, other public profile signals). Allowed in allowlisted channels, the log channel, or for administrators and the moderator role. |
+| `/sethoneypot [channel]` | Administrator | Set or clear the honeypot channel. Warns if the bot lacks Ban Members. |
+| `/addscanchannel`, `/removescanchannel` | Manage Messages | Maintain the allowlist. |
+| `/enableunverification`, `/disableunverification` | Manage Messages | Stores a setting only. The sweep is not implemented, so nothing is unverified. |
+| `/manualresetinactivity <member>` | Manage Messages | Reset a member's inactivity timer. |
+
+### Engagement
+
+| Command | Permission | Description |
+|---|---|---|
+| `/emojirank [top/bottom]` | Everyone | Top 10 custom emoji by message use. |
+| `/reactionrank [top/bottom]` | Everyone | Top 10 custom emoji by reaction use. |
+
+---
+
+## 5. Administrator Workflows & Safety
+
+1. **Initial setup**: run `/crouton setup`, then `/sethoneypot` only if you want one.
+2. **Honeypot**: any non-exempt member who posts in the honeypot channel (or a thread in it) is banned and their last hour of messages removed. Exempt: owner, Administrator, Manage Server, Ban Members, Kick Members, Manage Messages, and the moderator role. Put the bot's role above ordinary members. If banning is impossible, the message is deleted and the log channel says why. Never place a honeypot in a channel people use normally.
+3. **Roleplay content**: use `/add_rp`, `/edit_rp`, and `/manage_rp`. Display names inserted into text are escaped so they cannot create links or pings.
+4. **Permissions at click time**: management menus and forms re-check Manage Messages when used, so removing a moderator's permission takes effect immediately.
+5. **Backups**: a backup is written automatically before database upgrades. To back up a running bot, use SQLite's backup (`sqlite3 rp.db ".backup file"`), not a plain file copy, because the database is in WAL mode.
+6. **Privacy**: see [PRIVACY.md](../PRIVACY.md).

@@ -1,160 +1,120 @@
 # Privacy Policy
 
-Last updated: October 16, 2026
+Last updated: November 7, 2026
 
-This privacy policy explains what data Okiner collects, stores, and uses when it runs as a Discord bot. The short version: Okiner stores only the data needed to provide its roleplay, family, security, and moderation features, does not sell data, and does not share stored data with third parties for advertising, analytics, or profiling.
+This policy explains what data Okiner collects, stores, and uses when it runs as a Discord bot. In short: Okiner stores only what its roleplay, family, security, and moderation features need, does not sell data, and does not share stored data with third parties for advertising, analytics, or profiling.
 
 ## Instance Operator
 
-This policy governs the official Okiner bot instance operated by the bot owner listed in the Contact section below.
+This policy governs the official Okiner bot instance operated by the owner listed in the Contact section.
 
-If you self-host, fork, modify, or run your own instance of Okiner, you are responsible for providing your own privacy policy, your own operator contact information, and any disclosures required by the way you host, configure, modify, log, or otherwise operate the bot. This policy does not automatically cover unofficial, self-hosted, forked, or modified instances.
+If you self-host, fork, or modify Okiner, you are responsible for your own privacy policy, contact information, and disclosures. This policy does not cover unofficial instances.
 
 ## Who This Applies To
 
-This policy applies to users and server administrators of any Discord server where Okiner is installed.
-
-Okiner runs on Discord, so Discord may separately process messages, interactions, member information, and other platform data under Discord's own terms and privacy policy. This policy only covers what Okiner itself collects, stores, and uses.
+Users and administrators of any Discord server where Okiner is installed. Discord separately processes messages, interactions, and member information under its own terms and privacy policy. This policy covers only what Okiner itself collects, stores, and uses.
 
 ## Data Okiner Stores
 
-Okiner stores data in a local SQLite database named `rp.db`.
+Okiner stores data in a local SQLite database (`rp.db`).
 
-Okiner stores the following server configuration data:
+**Server configuration**
 
-- Discord server IDs for servers that configure roleplay features.
-- Roleplay type names created for each server.
-- Server configuration settings (log channel IDs, honeypot channel IDs, verified role IDs, moderator role IDs, and inactivity system toggle states).
+- Discord server IDs for servers that use Okiner features.
+- Log channel, honeypot channel, verified role, and moderator role IDs, and the inactivity setting.
 - Allowlisted channel IDs for `/scan`.
 
-Okiner stores the following roleplay content data:
+**Roleplay content**
 
-- Discord user IDs for users who add roleplay entries.
-- Discord server IDs associated with those entries.
-- Roleplay type names.
-- Roleplay case labels, such as `standard`, `selfcase`, and `nullcase`.
-- Image URLs added by moderators.
-- Text templates added by moderators.
-- Action text templates added by moderators.
+- RP type names, case labels (`standard`, `selfcase`, `nullcase`), image URLs, text templates, and action text templates added by moderators.
+- The Discord user ID of the person who added each entry, and the server ID.
+- Uploaded images are stored only as Discord attachment links, not as files.
 
-Okiner stores the following family feature data:
+**Family features** (shared across all servers, not tied to one server)
 
-- Discord user IDs for married users.
-- Discord user IDs for parent and child relationships.
-- Marriage timestamps.
-- Adoption timestamps.
+- Discord user IDs of married users and of parent and child pairs.
+- Marriage and adoption timestamps.
 
-Okiner stores the following moderation and activity telemetry data:
+**Activity telemetry** (per server)
 
-- Member behavior records per guild (total message counts, join timestamps, last active timestamps, and inactivity reset/status timestamps).
-- Guild custom emoji usage counts for messages and reactions.
+- Per member: message count, join timestamp, last-active timestamp, and inactivity status and reset timestamps.
+- Custom emoji use counts from messages and reactions.
+- Counters are kept in memory and written to the database about every 15 seconds and at shutdown.
+- The database also has columns reserved for future features that are currently unused and empty: staff-directed message count, daily message counts, daily reaction activity, voice session start, inviter, and invite code.
 
-Okiner does not intentionally store message contents from regular chat messages. The only text content stored by the bot is content deliberately submitted through Okiner commands, such as roleplay text templates, action text templates, roleplay type names, and image URLs.
+Okiner does not store the contents of regular chat messages. The only text stored is what is deliberately submitted through Okiner commands. Message content is read in memory to find custom emoji and the `oki!sync` prefix command, and is not saved.
 
 ## Data Okiner Uses Temporarily
 
-Okiner also receives or reads some Discord data at runtime so commands can work. This data is used temporarily and is not intentionally saved unless listed above.
+Okiner reads some Discord data at runtime so commands work, and does not save it unless listed above:
 
-Okiner may temporarily use:
+- IDs, names, display names, and mentions of the person running a command and of any target.
+- Server member lists for autocomplete and lookup.
+- Interaction, modal, select, and button data for guided flows, and message references for temporary buttons.
+- For `/scan`: the target's account creation date, avatar state, and similar public profile information used to compute a trust score. Scan results are shown in Discord and are **not** stored.
 
-- The Discord user ID of the person running a command.
-- The Discord server ID where a command is used.
-- The target user's Discord ID, mention, username, and display name when a command targets another member.
-- Server member lists, usernames, display names, and user IDs for target autocomplete and member lookup.
-- Interaction data needed to reply to slash commands and button clicks.
-- Modal inputs, select menu selections, and button interaction data for guided roleplay creation, management, and setup.
-- Message references for temporary confirmation buttons and roleplay back buttons.
-
-The bot currently enables these Discord gateway intents in code:
-
-- Presence Intent.
-- Server Members Intent.
-- Message Content Intent.
-
-At the time of this policy, Okiner uses member data for member lookup and autocomplete. Okiner does not intentionally store presence data or regular message content. Message Content Intent is enabled for bot operation, alt/trust scanning, message activity tracking, and emoji/reaction tracking.
+Gateway intents used: Server Members and Message Content. The Presence Intent is not used, and Okiner does not read or store online status.
 
 ## How Data Is Used
 
-Okiner uses stored and temporary data to:
+- Register, list, edit, and remove roleplay types and entries, and fill placeholders such as `{user}` and `{target}` in responses.
+- Resolve target members and enforce permission checks.
+- Store, check, and remove marriage and adoption records.
+- Run `/scan` and the honeypot (below).
+- Keep activity counts and emoji leaderboards.
+- Log startup status and errors for maintenance.
 
-- Register, list, and remove roleplay types for a server.
-- Save, list, remove, and randomly select roleplay images, text templates, and action text templates.
-- Replace placeholders like `{user}`, `{target}`, `{user_name}`, and `{target_name}` when generating roleplay responses.
-- Resolve a typed or autocompleted target member for roleplay commands.
-- Enforce command behavior, such as moderator-only roleplay management commands and owner-only sync commands.
-- Store and check marriage relationships.
-- Store and check parent-child adoption relationships.
-- Remove relationship records when divorce or disown commands are used.
-- Send command responses, confirmation prompts, and temporary buttons.
-- Run native Python alt/trust analysis (`/scan`) and enforce honeypot channel security (banning non-staff members posting in the designated honeypot channel).
-- Track community engagement metrics (emoji usage leaderboards and member activity).
-- Log startup status and unexpected errors for debugging and maintenance.
+## Honeypot Actions
+
+If a server sets a honeypot channel, a non-staff member who posts there is banned and their messages from the last hour are removed. Okiner posts a notice in the server's configured log channel that includes the member's user ID and mention, and whether the ban succeeded. That notice is visible to anyone who can read that channel.
 
 ## Logs
 
-Okiner uses application logs for operational visibility and debugging.
+Application logs may include the bot account name and ID at startup, an invite URL if `DISCORD_APPLICATION_ID` is configured, and error messages and tracebacks. They are not used for advertising, profiling, or sale. Depending on hosting, they may be kept in the console or hosting provider storage.
 
-Logs may include:
+## Backups
 
-- The bot account name and bot user ID when the bot starts.
-- An invite URL if `DISCORD_APPLICATION_ID` is configured.
-- Error messages and Python tracebacks when a command or database operation fails.
-
-Logs are not used for advertising, profiling, or sale. Depending on the hosting environment, logs may be written to the console, terminal, process manager, or hosting provider log storage.
+Before database upgrades, Okiner writes a backup copy of the database (`rp.db.bak-<timestamp>`) on the same machine. Backups contain the same data as the database and are kept until the operator deletes them.
 
 ## Data Sharing and Sale
 
-Okiner does not sell user data.
+Okiner does not sell user data or share stored data with third parties for advertising, analytics, profiling, or marketing. Okiner operates through Discord, so commands, responses, embeds, and mentions pass through Discord's systems. If a saved image URL points to an external website, Discord may fetch and display that image.
 
-Okiner does not share stored user data with third parties for advertising, analytics, profiling, or marketing.
+## Data Retention and Deletion
 
-Okiner necessarily operates through Discord. Command inputs, command responses, embeds, buttons, mentions, and other Discord interactions pass through Discord's systems. If a saved image URL points to an external website, that URL may be displayed in a Discord embed or message as part of the roleplay feature.
+Okiner keeps stored data until it is removed by command, deleted by the operator, or no longer needed.
 
-## Data Retention
-
-Okiner keeps stored data until it is removed by command, deleted from the database by the bot owner/operator, or no longer needed for the bot's operation.
-
-Current command-based deletion and management includes:
-
-- `/manage_rp`, which provides an interactive navigation flow to browse, edit, or delete roleplay types, image URLs, embed text templates, and action text templates (including standard, selfcase, and nullcase pools) or delete entire roleplay types.
-- `/divorce`, which removes a marriage record.
-- `/disown`, which removes an adoption relationship record.
-
-Server administrators or users may contact the bot owner/operator to request deletion of data associated with a server or user if command-based deletion is not enough.
+- `/manage_rp` deletes RP types, entries, and images.
+- `/divorce` removes a marriage record; `/disown` removes an adoption record.
+- When a member leaves a server, that member's activity record for that server is deleted.
+- When Okiner is removed from a server, that server's configuration, scan channels, activity records, emoji counts, and roleplay types and entries are deleted. If the bot was offline at the time, this runs only if it receives the removal event, so contact the operator if data remains.
+- Marriage and adoption records are not tied to a server and are not deleted when a server or member leaves; they are removed by `/divorce`, `/disown`, or on request.
+- RP entries record the ID of the user who added them; this is not removed when that user leaves.
+- A self-service "delete my data" command is not currently available. Contact the operator to request deletion of data for a user or server.
 
 ## Access and Control
 
-Roleplay management and moderation commands are restricted to users with appropriate permissions (Manage Messages or Administrator).
-
-Family feature commands can be used by server members in servers where Okiner is installed. Marriage and adoption records are created only after the target user accepts the bot's confirmation prompt.
-
-The bot owner/operator has access to the bot's database and logs as needed to run, maintain, debug, back up, or remove the bot.
+Roleplay management and moderation commands require Manage Messages or Administrator, checked when a command runs and again when its buttons or forms are used. Marriage and adoption records are created only after the target accepts a confirmation prompt. The operator has access to the database, backups, and logs as needed to run, maintain, debug, back up, or remove the bot.
 
 ## Security
 
-Okiner stores data in a local SQLite database. Access to that database depends on the security of the machine or hosting environment where the bot is running.
-
-The bot token is loaded from environment configuration and should not be shared publicly. Anyone operating this bot should keep the `.env` file, database files, and runtime logs private.
+Data is stored in a local SQLite database, so its security depends on the machine or hosting environment. The bot token is loaded from environment configuration and must be kept private, along with `.env`, database files, backups, and logs.
 
 ## Children's Privacy
 
-Okiner is a general-audience Discord bot. It is not directed to children under 13, and the official Okiner instance is not intended for use by children under 13.
+Okiner is a general-audience bot and is not directed to children under 13. For users in the United States, Okiner does not knowingly collect personal information from children under 13; if the operator learns that it has, it will delete that information as soon as reasonably possible.
 
-For users in the United States, Okiner does not knowingly collect personal information from children under 13. If the operator learns that personal information from a child under 13 has been collected without verifiable parental consent, the operator will delete that information as soon as reasonably possible.
-
-For users in the European Economic Area, United Kingdom, or other regions with child data protection rules, Okiner is not intended for use by anyone who cannot lawfully consent to personal data processing under the laws that apply to them, unless consent is given or authorized by a parent or holder of parental responsibility where required. Under GDPR Article 8, the default age for a child to consent to information society services is 16, but EU member states may set a lower age down to 13.
-
-Parents, guardians, or holders of parental responsibility may contact the operator using the Contact section below to request review or deletion of a child's data.
+For users in the European Economic Area, the United Kingdom, or other regions with child data protection rules, Okiner is not intended for anyone who cannot lawfully consent to processing under the laws that apply to them, unless a parent or holder of parental responsibility consents where required. Under GDPR Article 8 the default age is 16, though member states may set it as low as 13. Parents or guardians may contact the operator to request review or deletion of a child's data.
 
 ## Changes to This Policy
 
-This policy may be updated as Okiner changes. If new features collect or store new kinds of data, this policy should be updated to disclose those changes.
+This policy will be updated when Okiner changes in ways that affect the data it collects or stores.
 
 ## Contact
 
-For privacy questions or deletion requests, contact the owner/operator of the official Okiner bot instance:
+For privacy questions or deletion requests, contact the operator of the official Okiner bot instance:
 
-- Operator name or handle: `[JustSomeBeans]`
-- Contact method: `[Discord username: justsomebeans]`
+- Operator: Okiner Official
+- Email: OkinerOfficial@proton.me
 
 Self-hosters must replace this section with their own contact information before making their instance available to others.
