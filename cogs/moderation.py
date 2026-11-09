@@ -46,7 +46,7 @@ class Moderation(commands.Cog):
 
     crouton_group = app_commands.Group(name="crouton", description="Crouton bot configuration and info")
 
-    @crouton_group.command(name="setup", description="Configure log channel, verified role, and moderator role.")
+    @crouton_group.command(name="setup", description="Set log channel, verified role, moderator role. Omitted options are kept.")
     @app_commands.checks.has_permissions(administrator=True)
     async def crouton_setup(
         self,
@@ -113,6 +113,33 @@ class Moderation(commands.Cog):
         embed.add_field(name="Moderator Role", value=f"<@&{mod_id}>" if mod_id else "Not set", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @crouton_group.command(name="clear", description="Clear the log channel, verified role, moderator role and honeypot channel.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def crouton_clear(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id
+        if not guild_id:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+
+        updated = await database.execute_write(
+            """
+            UPDATE guild_configs
+            SET log_channel_id = NULL,
+                honeypot_channel_id = NULL,
+                verified_role_id = NULL,
+                moderator_role_id = NULL
+            WHERE guild_id = ?
+            """,
+            (guild_id,),
+        )
+        database.invalidate_guild_config(guild_id)
+
+        if updated:
+            msg = "Cleared the log channel, verified role, moderator role and honeypot channel. Scan channels and the inactivity setting were not changed."
+        else:
+            msg = "There were no saved settings to clear."
+        await interaction.response.send_message(msg, ephemeral=True)
+
     @crouton_group.command(name="help", description="In-Discord command reference and feature guide.")
     async def crouton_help(self, interaction: discord.Interaction) -> None:
         embed = discord.Embed(
@@ -122,7 +149,7 @@ class Moderation(commands.Cog):
         )
         embed.add_field(
             name="Configuration",
-            value="/crouton setup - Configure roles and log channel\n/sethoneypot - Set honeypot channel\n/addscanchannel /removescanchannel - Manage scan channels",
+            value="/crouton setup - Configure roles and log channel\n/crouton clear - Clear all saved settings\n/sethoneypot - Set or clear honeypot channel\n/addscanchannel /removescanchannel - Manage scan channels",
             inline=False
         )
         embed.add_field(
