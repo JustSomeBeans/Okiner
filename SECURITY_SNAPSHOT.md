@@ -1,7 +1,7 @@
 # Okiner Security Snapshot
 
 Date: November 9, 2026
-Scope: the `main after the hardening merge. This replaces earlier snapshots, which contained inaccurate claims (for example that all data is guild-partitioned and that transaction helpers alone provided atomicity).
+Scope: the `main` branch after the hardening merge. This replaces earlier snapshots, which contained inaccurate claims (for example that all data is guild-partitioned and that transaction helpers alone provided atomicity).
 
 ## Data model facts
 

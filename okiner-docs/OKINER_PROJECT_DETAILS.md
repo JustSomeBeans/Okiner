@@ -149,7 +149,7 @@ Six SQLite triggers, installed by `database.INTEGRITY_TRIGGERS_SQL`, reject inse
 
 ## 6. Caching and Batching
 
-- **Guild config cache** (`database.get_guild_config`): in-process dict of frozen `GuildConfig` dataclasses, `None` cached too. Every writer of `guild_configs` must call `invalidate_guild_config` after its write. The honeypot listener, `/scan`, `/crouton setup`, and `/crouton clear` (which uses `database.execute_write` and `database.invalidate_guild_config`) read/write through it.
+- **Guild config cache** (`database.get_guild_config`): in-process dict of frozen `GuildConfig` dataclasses, `None` cached too. Every writer of `guild_configs` must call `invalidate_guild_config` after its write. The honeypot listener, `/scan` and `/crouton setup` read through the cache; `/crouton clear` does not read it, it writes with `database.execute_write` and then calls `invalidate_guild_config`.
 - **Behavior batching** (`cogs/behavior.py`): messages and reactions increment in-memory counters; a 15 second `tasks.loop` and `cog_unload` flush them in one transaction with additive upserts (`MAX` for last-active time). The counters are swapped out before the write so concurrent increments are not lost; a failed flush merges back. Honeypot-channel messages are not counted. Join time comes from `member.joined_at`.
 - A flush already in flight can re-insert a row for a member or server removed at the same moment. This is accepted.
 
