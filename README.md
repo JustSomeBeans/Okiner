@@ -120,11 +120,12 @@ All slash commands work only inside servers. Management and security commands re
 
 | Command | Permission | Description |
 |---|---|---|
-| `/crouton setup` | Administrator | Set log channel, verified role, moderator role. Options you leave out keep their current value. |
+| `/crouton setup` | Administrator | Set log channel, verified role, moderator role. Provided options replace the saved value; omitted options are kept (use /crouton clear to clear). |
+| `/crouton clear` | Administrator | Clear the log channel, verified role, moderator role, and honeypot channel. Does not change scan channels or the inactivity setting. Reports if there are no saved settings to clear. |
 | `/crouton help` | Everyone | Command reference. |
 | `/crouton uptime` | Everyone | Process uptime. |
 | `/scan <member>` | Manage Messages | Alt/trust analysis card, only in allowlisted channels, the log channel, or for admins and the moderator role. |
-| `/sethoneypot [channel]` | Administrator | Set or clear the honeypot channel. Cannot be the log channel. |
+| `/sethoneypot [channel]` | Administrator | Set or clear the honeypot channel (omitting the channel clears it). Cannot be the log channel. |
 | `/addscanchannel`, `/removescanchannel` | Manage Messages | Manage the `/scan` allowlist. |
 | `/enableunverification`, `/disableunverification` | Manage Messages | **Planned.** The setting is stored, but the automatic unverification sweep is not implemented yet, so nothing is unverified automatically. |
 | `/manualresetinactivity <member>` | Manage Messages | Reset a member's inactivity timer. |

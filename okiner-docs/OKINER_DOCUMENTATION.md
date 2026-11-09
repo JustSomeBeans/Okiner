@@ -1,6 +1,6 @@
 # Okiner Bot Documentation & Administrator Guide
 
-Last updated: November 7, 2026
+Last updated: November 9, 2026
 
 ## 1. System Overview
 
@@ -97,10 +97,11 @@ Relationships are global: a marriage or adoption is not limited to one server.
 
 | Command | Permission | Description |
 |---|---|---|
-| `/crouton setup` | Administrator | Set log channel, verified role, moderator role. Omitted options keep their stored values. Rejected: @everyone as a role, a managed role as the verified role, a log channel the bot cannot post in, and a log channel equal to the honeypot channel. |
+| `/crouton setup` | Administrator | Set log channel, verified role, moderator role. Provided options replace stored values; omitted options are kept (use /crouton clear to clear). Rejected: @everyone as a role, a managed role as the verified role, a log channel the bot cannot post in, and a log channel equal to the honeypot channel. |
+| `/crouton clear` | Administrator | Clear the log channel, verified role, moderator role, and honeypot channel. Does not change scan channels or the inactivity setting. If the server has no saved settings, reports that there were no saved settings to clear. |
 | `/crouton help` / `uptime` | Everyone | Help text and uptime. |
 | `/scan <member>` | Manage Messages | Trust analysis card (account age, avatar, other public profile signals). Allowed in allowlisted channels, the log channel, or for administrators and the moderator role. |
-| `/sethoneypot [channel]` | Administrator | Set or clear the honeypot channel. Warns if the bot lacks Ban Members. |
+| `/sethoneypot [channel]` | Administrator | Set or clear the honeypot channel (omitting the channel clears it). Warns if the bot lacks Ban Members. |
 | `/addscanchannel`, `/removescanchannel` | Manage Messages | Maintain the allowlist. |
 | `/enableunverification`, `/disableunverification` | Manage Messages | Stores a setting only. The sweep is not implemented, so nothing is unverified. |
 | `/manualresetinactivity <member>` | Manage Messages | Reset a member's inactivity timer. |
